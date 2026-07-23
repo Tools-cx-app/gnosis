@@ -1,0 +1,14 @@
+/target/
+/gnosis.toml
+/var/
+
+*.img
+*.log
+*.orig
+*.rej
+*.tmp
+
+.cache/
+.idea/
+.vscode/
+compile_commands.json
