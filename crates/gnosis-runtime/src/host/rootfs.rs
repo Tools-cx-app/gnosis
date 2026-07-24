@@ -19,12 +19,20 @@ mod magic {
     pub const LOOP_CTL_GET_FREE: libc::c_int = 0x4c82;
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), not(target_env = "musl")))]
 mod magic {
     pub const LOOP_SET_FD: libc::c_ulong = 0x4c00;
     pub const LOOP_CLR_FD: libc::c_ulong = 0x4c01;
     pub const LOOP_SET_STATUS64: libc::c_ulong = 0x4c04;
     pub const LOOP_CTL_GET_FREE: libc::c_ulong = 0x4c82;
+}
+
+#[cfg(all(not(target_os = "android"), target_env = "musl"))]
+mod magic {
+    pub const LOOP_SET_FD: libc::c_int = 0x4c00;
+    pub const LOOP_CLR_FD: libc::c_int = 0x4c01;
+    pub const LOOP_SET_STATUS64: libc::c_int = 0x4c04;
+    pub const LOOP_CTL_GET_FREE: libc::c_int = 0x4c82;
 }
 
 use magic::{LOOP_CLR_FD, LOOP_CTL_GET_FREE, LOOP_SET_FD, LOOP_SET_STATUS64};
