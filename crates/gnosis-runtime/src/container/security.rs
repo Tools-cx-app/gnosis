@@ -128,12 +128,8 @@ pub fn install_seccomp(config: &SecurityConfig) -> Result<()> {
         libc::SYS_clock_adjtime,
     ];
     #[cfg(all(
-        any(
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            target_arch = "riscv64"
-        ),
-        not(target_os = "android")
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        all(not(target_os = "android"), not(target_env = "musl"))
     ))]
     blocked.push(libc::SYS_kexec_file_load);
 
