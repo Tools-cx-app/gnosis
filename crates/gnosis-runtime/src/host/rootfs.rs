@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use gnosis_config::Config;
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 
 #[cfg(target_os = "android")]
@@ -75,32 +76,42 @@ impl Default for LoopInfo64 {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Rootfs {
+    configured: Option<PathBuf>,
+    image: Option<PathBuf>,
+    mountpoint: PathBuf,
+}
+
+struct PreparedRootfs {
     path: PathBuf,
     loop_device: Option<File>,
     mounted: bool,
 }
 
 impl Rootfs {
-    pub fn prepare(config: &gnosis_config::Config) -> Result<Self> {
-        if let Some(path) = &config.container.rootfs {
-            return Ok(Self {
+    pub(crate) fn new(config: &Config, mount_dir: &Path) -> Self {
+        Self {
+            configured: config.container.rootfs.clone(),
+            image: config.container.rootfs_image.clone(),
+            mountpoint: mount_dir.join(&config.container.name),
+        }
+    }
+
+    pub fn prepare(&self) -> Result<impl AsRef<Path> + use<>> {
+        if let Some(path) = &self.configured {
+            return Ok(PreparedRootfs {
                 path: path.clone(),
                 loop_device: None,
                 mounted: false,
             });
         }
-        let image = config
-            .container
-            .rootfs_image
+        let image = self
+            .image
             .as_ref()
             .context("rootfs image is not configured")?;
         let filesystem = detect_filesystem(image)?;
-        let mountpoint = config
-            .runtime
-            .workdir
-            .join("mounts")
-            .join(&config.container.name);
+        let mountpoint = self.mountpoint.clone();
         fs::create_dir_all(&mountpoint)?;
 
         let metadata = fs::metadata(image)?;
@@ -122,19 +133,21 @@ impl Rootfs {
             }
             return Err(error).context("failed to mount rootfs image");
         }
-        Ok(Self {
+        Ok(PreparedRootfs {
             path: mountpoint,
             loop_device,
             mounted: true,
         })
     }
+}
 
-    pub fn path(&self) -> &Path {
+impl AsRef<Path> for PreparedRootfs {
+    fn as_ref(&self) -> &Path {
         &self.path
     }
 }
 
-impl Drop for Rootfs {
+impl Drop for PreparedRootfs {
     fn drop(&mut self) {
         if self.mounted {
             let _ = umount2(&self.path, MntFlags::MNT_DETACH);

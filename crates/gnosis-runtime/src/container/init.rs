@@ -6,10 +6,28 @@ use std::{
 };
 
 use anyhow::Result;
+use gnosis_config::Config;
 use nix::sys::signal::Signal;
 use serde::{Deserialize, Serialize};
 
 use crate::host::process::ProcessHandle;
+
+#[derive(Debug, Clone)]
+pub(crate) struct Init {
+    path: PathBuf,
+}
+
+impl Init {
+    pub(crate) fn new(config: &Config) -> Self {
+        Self {
+            path: config.container.init.clone(),
+        }
+    }
+
+    pub(crate) fn detect(&self, rootfs: &Path) -> InitSystem {
+        detect(rootfs, &self.path)
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

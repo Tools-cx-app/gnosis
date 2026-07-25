@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File},
     io::Read,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, OwnedFd},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -29,7 +29,6 @@ use crate::{
         cgroup::Cgroup,
         network::Network,
         process::{ProcessHandle, parent_pid as process_parent, require_handle},
-        rootfs::Rootfs,
         terminal,
     },
     runtime::state::{
@@ -61,7 +60,8 @@ impl Runtime {
             self.config.container.name
         );
 
-        let (reader, writer) = nix::unistd::pipe().context("failed to create startup pipe")?;
+        let (reader, writer) =
+            nix::unistd::pipe2(OFlag::O_CLOEXEC).context("failed to create startup pipe")?;
         // SAFETY: the CLI is single-threaded at this point and the child immediately enters the monitor path.
         match unsafe { fork() }.context("failed to fork monitor")? {
             ForkResult::Parent { child } => {
@@ -108,17 +108,14 @@ impl Runtime {
         configure_monitor_signals()?;
         let console = terminal::Console::open()?;
         #[cfg(target_os = "android")]
-        let _selinux = android::SelinuxGuard::apply(
-            &self.config.container.android,
-            &self.config.runtime.workdir,
-        )?;
+        let _selinux = android::SelinuxGuard::apply(&self.config.container.android, &self.workdir)?;
         let host_netns = File::open("/proc/self/ns/net")?;
         unshare(CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWIPC)
             .context("failed to create UTS/IPC namespaces")?;
-        let rootfs = Rootfs::prepare(&self.config)?;
-        let init_system = init::detect(rootfs.path(), &self.config.container.init);
+        let rootfs = self.rootfs.prepare()?;
+        let init_system = self.init.detect(rootfs.as_ref());
         let mut cgroup = Cgroup::create(
-            &self.config.runtime.workdir,
+            &self.workdir,
             &self.config.container.name,
             &self.config.container.resources,
         )?;
@@ -193,7 +190,7 @@ impl Runtime {
                                 self.boot(
                                     &boot_writer,
                                     network_reader,
-                                    rootfs.path(),
+                                    rootfs.as_ref(),
                                     Some(&console.slave),
                                     uuid,
                                 )
@@ -274,7 +271,7 @@ impl Runtime {
                     name: self.config.container.name.clone(),
                     init_pid: init_pid.as_raw(),
                     monitor_pid,
-                    rootfs: rootfs.path().to_path_buf(),
+                    rootfs: rootfs.as_ref().to_path_buf(),
                     uuid,
                     host_boot_id: host_boot_id.clone(),
                     init_start_time: process_start_time(init_pid.as_raw())?,
@@ -581,12 +578,7 @@ impl Runtime {
     }
 
     fn setup_volatile_root(&self, lower: &Path) -> Result<PathBuf> {
-        let base = self
-            .config
-            .runtime
-            .workdir
-            .join("volatile")
-            .join(&self.config.container.name);
+        let base = self.volatile_dir.join(&self.config.container.name);
         fs::create_dir_all(&base)?;
         mount(
             Some("tmpfs"),
@@ -638,10 +630,8 @@ impl Runtime {
             "container init identity changed before pidfd validation"
         );
         let init_system = if state.init_system == init::InitSystem::Unknown {
-            init::detect(
-                &PathBuf::from(format!("/proc/{}/root", state.init_pid)),
-                &self.config.container.init,
-            )
+            self.init
+                .detect(&PathBuf::from(format!("/proc/{}/root", state.init_pid)))
         } else {
             state.init_system
         };

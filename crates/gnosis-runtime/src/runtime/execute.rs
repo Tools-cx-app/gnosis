@@ -109,7 +109,7 @@ impl Runtime {
                     sender
                 });
                 let cgroup = Cgroup::create(
-                    &self.config.runtime.workdir,
+                    &self.workdir,
                     &self.config.container.name,
                     &self.config.container.resources,
                 )

@@ -185,14 +185,10 @@ impl Runtime {
     }
 
     pub(crate) fn ensure_layout(&self) -> Result<()> {
-        ensure_trusted_directory(&self.config.runtime.workdir)?;
+        ensure_trusted_directory(&self.workdir)?;
         let state_dir = self.state_dir();
-        fs::create_dir_all(&state_dir).with_context(|| {
-            format!(
-                "failed to create workdir {}",
-                self.config.runtime.workdir.display()
-            )
-        })?;
+        fs::create_dir_all(&state_dir)
+            .with_context(|| format!("failed to create workdir {}", self.workdir.display()))?;
         ensure_trusted_directory(&state_dir)?;
         let recovery_dir = self.recovery_dir();
         fs::create_dir_all(&recovery_dir)?;
@@ -200,7 +196,7 @@ impl Runtime {
     }
 
     fn state_dir(&self) -> PathBuf {
-        self.config.runtime.workdir.join("state")
+        self.state_dir.clone()
     }
     fn state_path(&self) -> PathBuf {
         self.state_path_for(&self.config.container.name)
@@ -211,7 +207,7 @@ impl Runtime {
     }
 
     fn recovery_dir(&self) -> PathBuf {
-        self.config.runtime.workdir.join("recovery")
+        self.recovery_dir.clone()
     }
 
     fn recovery_path(&self, uuid: Uuid) -> PathBuf {
@@ -272,11 +268,6 @@ impl Runtime {
     }
 
     pub(crate) fn lock(&self) -> Result<File> {
-        let path = self
-            .config
-            .runtime
-            .workdir
-            .join(format!("{}.lock", self.config.container.name));
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -284,18 +275,13 @@ impl Runtime {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(path)?;
+            .open(&self.lock_path)?;
         file.lock_exclusive()
             .context("failed to lock container lifecycle")?;
         Ok(file)
     }
 
     pub(crate) fn try_lock(&self) -> Result<Option<File>> {
-        let path = self
-            .config
-            .runtime
-            .workdir
-            .join(format!("{}.lock", self.config.container.name));
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -303,7 +289,7 @@ impl Runtime {
             .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(path)?;
+            .open(&self.lock_path)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(file)),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
