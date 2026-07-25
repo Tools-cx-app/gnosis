@@ -117,12 +117,13 @@ impl Runtime {
             .context("failed to create UTS/IPC namespaces")?;
         let rootfs = Rootfs::prepare(&self.config)?;
         let init_system = init::detect(rootfs.path(), &self.config.container.init);
+        let uuid = self.config.container.uuid.unwrap_or_else(Uuid::new_v4);
         let mut cgroup = Cgroup::create(
             &self.config.runtime.workdir,
             &self.config.container.name,
+            uuid,
             &self.config.container.resources,
         )?;
-        let uuid = self.config.container.uuid.unwrap_or_else(Uuid::new_v4);
         let host_boot_id = host_boot_id()?;
         let monitor_pid = getpid().as_raw();
         let monitor_start_time = process_start_time(monitor_pid)?;

@@ -454,7 +454,7 @@ fn namespace_pid(pid: i32) -> Result<Option<i32>> {
     }))
 }
 
-fn ensure_trusted_directory(path: &Path) -> Result<()> {
+pub(crate) fn ensure_trusted_directory(path: &Path) -> Result<()> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     if !path.exists() {
         fs::create_dir_all(path)?;

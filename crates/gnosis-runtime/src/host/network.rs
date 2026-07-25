@@ -2,7 +2,7 @@ use std::{
     fmt::Write as _,
     fs::{self, File, OpenOptions},
     os::{fd::AsFd, unix::fs::OpenOptionsExt},
-    path::Path,
+    path::{Path, PathBuf},
     process::Command,
 };
 
@@ -12,11 +12,15 @@ use gnosis_config::{Config, NetworkMode, Protocol};
 use nix::sched::{CloneFlags, setns};
 use serde::{Deserialize, Serialize};
 
+use crate::runtime::state::ensure_trusted_directory;
+
+const NETWORK_RUNTIME_DIRECTORY: &str = "/run/gnosis";
+
 pub struct Network {
     host_link: Option<String>,
     peer_link: Option<String>,
     rules: Vec<Vec<String>>,
-    workdir: Option<std::path::PathBuf>,
+    managed: bool,
     nat_lease: bool,
 }
 
@@ -33,8 +37,8 @@ impl Network {
             return Ok(network);
         }
 
-        let _lock = network_lock(&config.runtime.workdir)?;
-        network.workdir = Some(config.runtime.workdir.clone());
+        let _lock = network_lock()?;
+        network.managed = true;
         let host_link = format!("dsv{init_pid}");
         let peer_link = format!("dsp{init_pid}");
         network.host_link = Some(host_link.clone());
@@ -69,7 +73,7 @@ impl Network {
             )?;
 
             if config.container.network == NetworkMode::Nat {
-                acquire_nat_lease(&config.runtime.workdir)?;
+                acquire_nat_lease()?;
                 network.nat_lease = true;
                 fs::write("/proc/sys/net/ipv4/ip_forward", "1")?;
                 let subnet = format!(
@@ -225,7 +229,7 @@ impl Network {
             host_link: None,
             peer_link: None,
             rules: Vec::new(),
-            workdir: None,
+            managed: false,
             nat_lease: false,
         }
     }
@@ -239,10 +243,7 @@ impl Network {
     }
 
     fn cleanup_resources(&mut self) {
-        let _lock = self
-            .workdir
-            .as_deref()
-            .and_then(|workdir| network_lock(workdir).ok());
+        let _lock = self.managed.then(|| network_lock().ok()).flatten();
         self.cleanup_resources_locked();
     }
 
@@ -260,12 +261,10 @@ impl Network {
         }
         self.peer_link = None;
         if self.nat_lease {
-            if let Some(workdir) = &self.workdir {
-                let _ = release_nat_lease(workdir);
-            }
+            let _ = release_nat_lease();
             self.nat_lease = false;
         }
-        self.workdir = None;
+        self.managed = false;
     }
 }
 
@@ -275,8 +274,9 @@ impl Drop for Network {
     }
 }
 
-fn network_lock(workdir: &Path) -> Result<File> {
-    fs::create_dir_all(workdir)?;
+fn network_lock() -> Result<File> {
+    let directory = Path::new(NETWORK_RUNTIME_DIRECTORY);
+    ensure_trusted_directory(directory)?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -284,7 +284,7 @@ fn network_lock(workdir: &Path) -> Result<File> {
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(workdir.join("network.lock"))?;
+        .open(directory.join("network.lock"))?;
     file.lock_exclusive()?;
     Ok(file)
 }
@@ -295,8 +295,8 @@ struct NatLease {
     restore_disabled: bool,
 }
 
-fn acquire_nat_lease(workdir: &Path) -> Result<()> {
-    let path = workdir.join("network-state.json");
+fn acquire_nat_lease() -> Result<()> {
+    let path = nat_lease_path();
     let mut lease = read_nat_lease(&path);
     if lease.users == 0 {
         lease.restore_disabled = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")?.trim() == "0";
@@ -305,8 +305,8 @@ fn acquire_nat_lease(workdir: &Path) -> Result<()> {
     write_nat_lease(&path, &lease)
 }
 
-fn release_nat_lease(workdir: &Path) -> Result<()> {
-    let path = workdir.join("network-state.json");
+fn release_nat_lease() -> Result<()> {
+    let path = nat_lease_path();
     let mut lease = read_nat_lease(&path);
     lease.users = lease.users.saturating_sub(1);
     if lease.users == 0 {
@@ -335,6 +335,10 @@ fn write_nat_lease(path: &Path, lease: &NatLease) -> Result<()> {
     fs::write(&temporary, serde_json::to_vec(lease)?)?;
     fs::rename(temporary, path)?;
     Ok(())
+}
+
+fn nat_lease_path() -> PathBuf {
+    Path::new(NETWORK_RUNTIME_DIRECTORY).join("network-state.json")
 }
 
 fn owned_rule(name: &str, pid: i32, rule: &[&str]) -> Vec<String> {
@@ -441,4 +445,17 @@ fn masked_network(address: std::net::Ipv4Addr, prefix: u8) -> std::net::Ipv4Addr
         u32::MAX << (32 - prefix)
     };
     std::net::Ipv4Addr::from(u32::from(address) & mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nat_lease_uses_global_runtime_directory() {
+        assert_eq!(
+            nat_lease_path(),
+            Path::new("/run/gnosis/network-state.json")
+        );
+    }
 }

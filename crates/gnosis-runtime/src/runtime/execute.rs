@@ -111,6 +111,7 @@ impl Runtime {
                 let cgroup = Cgroup::create(
                     &self.config.runtime.workdir,
                     &self.config.container.name,
+                    state.uuid,
                     &self.config.container.resources,
                 )
                 .unwrap_or_else(|error| exec_failure(&error.to_string()));

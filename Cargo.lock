@@ -226,6 +226,8 @@ name = "gnosis-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fs2",
+ "libc",
  "serde",
  "tempfile",
  "toml",

@@ -1,11 +1,14 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Write,
     net::Ipv4Addr,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -199,8 +202,14 @@ impl Config {
     /// Returns an error when the source configuration is invalid or the
     /// persistent TOML rewrite cannot be committed.
     pub fn load_persistent(path: &Path) -> Result<Self> {
+        let _lock = lock_config(path)?;
         let config = Self::load(path)?;
         if config.container.uuid.is_none() {
+            let mode = fs::metadata(path)
+                .with_context(|| format!("failed to read config metadata {}", path.display()))?
+                .permissions()
+                .mode()
+                & 0o777;
             let source = fs::read_to_string(path)
                 .with_context(|| format!("failed to read config {}", path.display()))?;
             let mut document: toml::Value = toml::from_str(&source)
@@ -216,12 +225,31 @@ impl Config {
             let encoded = toml::to_string_pretty(&document)
                 .context("failed to serialize persistent TOML config")?;
             let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-            fs::write(&temporary, encoded).with_context(|| {
-                format!("failed to write temporary config {}", temporary.display())
-            })?;
-            fs::rename(&temporary, path).with_context(|| {
-                format!("failed to commit persistent config {}", path.display())
-            })?;
+            let result = (|| {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(mode)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(&temporary)
+                    .with_context(|| {
+                        format!("failed to create temporary config {}", temporary.display())
+                    })?;
+                file.set_permissions(fs::Permissions::from_mode(mode))?;
+                file.write_all(encoded.as_bytes()).with_context(|| {
+                    format!("failed to write temporary config {}", temporary.display())
+                })?;
+                file.sync_all()?;
+                fs::rename(&temporary, path).with_context(|| {
+                    format!("failed to commit persistent config {}", path.display())
+                })?;
+                File::open(parent_directory(path))?.sync_all()?;
+                Ok::<(), anyhow::Error>(())
+            })();
+            if result.is_err() {
+                fs::remove_file(&temporary).ok();
+            }
+            result?;
             return Self::load(path);
         }
         Ok(config)
@@ -418,6 +446,33 @@ impl Config {
     }
 }
 
+fn lock_config(path: &Path) -> Result<File> {
+    let mut name = path
+        .file_name()
+        .context("config path has no filename")?
+        .to_os_string();
+    name.push(".lock");
+    let lock_path = path.with_file_name(name);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open config lock {}", lock_path.display()))?;
+    file.lock_exclusive()
+        .with_context(|| format!("failed to lock config {}", path.display()))?;
+    Ok(file)
+}
+
+fn parent_directory(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 fn parse_environment_file(path: &Path) -> Result<BTreeMap<String, String>> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("failed to read environment file {}", path.display()))?;
@@ -525,7 +580,12 @@ fn valid_interface_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use tempfile::tempdir;
 
@@ -570,7 +630,91 @@ mod tests {
         let second = Config::load_persistent(&path).unwrap();
         assert_eq!(first.container.uuid, second.container.uuid);
         assert!(first.container.uuid.is_some());
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        assert!(fs::read_dir(dir.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+    }
+
+    #[test]
+    fn persists_restrictive_permissions() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
+        fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
+        let path = dir.path().join("container.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        Config::load_persistent(&path).unwrap();
+
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn does_not_copy_special_permission_bits() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
+        fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
+        let path = dir.path().join("container.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o7600)).unwrap();
+
+        Config::load_persistent(&path).unwrap();
+
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn bare_config_filename_uses_current_directory() {
+        assert_eq!(
+            parent_directory(Path::new("container.toml")),
+            Path::new(".")
+        );
+    }
+
+    #[test]
+    fn concurrent_persistent_loads_share_uuid() {
+        const CALLERS: usize = 32;
+
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
+        fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
+        let path = dir.path().join("container.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+        )
+        .unwrap();
+        let barrier = Arc::new(Barrier::new(CALLERS));
+        let callers = (0..CALLERS)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    Config::load_persistent(&path).unwrap().container.uuid
+                })
+            })
+            .collect::<Vec<_>>();
+        let uuids = callers
+            .into_iter()
+            .map(|caller| caller.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(uuids.iter().all(|uuid| *uuid == uuids[0]));
     }
 
     #[test]
