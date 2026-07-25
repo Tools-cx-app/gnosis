@@ -545,6 +545,13 @@ impl Runtime {
             ensure_no_symlink_components(Path::new("/"), &bind.target)?;
             let source = Path::new("/.old_root").join(strip_root(&bind.source));
             let target = Path::new("/").join(strip_root(&bind.target));
+            if !source.exists() {
+                bail!(
+                    "bind mount source does not exist: {} -> {}",
+                    source.display(),
+                    target.display()
+                );
+            }
             if source.is_dir() {
                 fs::create_dir_all(&target)?;
             } else {
