@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-caps.workspace = true
 gnosis-config = { path = "../gnosis-config" }
 fs2.workspace = true
 libc.workspace = true

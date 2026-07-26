@@ -1,7 +1,6 @@
-use std::{collections::HashSet, path::Path};
+use std::path::Path;
 
 use anyhow::{Context, Result};
-use caps::{CapSet, Capability};
 use gnosis_config::SecurityConfig;
 use nix::mount::{MsFlags, mount};
 
@@ -79,37 +78,6 @@ pub fn harden_mounts(config: &SecurityConfig) -> Result<()> {
             )
             .with_context(|| format!("failed to make mask read-only for {path}"))?;
         }
-    }
-    Ok(())
-}
-
-pub fn drop_dangerous_capabilities() -> Result<()> {
-    let dangerous = HashSet::from([
-        Capability::CAP_SYS_MODULE,
-        Capability::CAP_SYS_RAWIO,
-        Capability::CAP_SYS_PTRACE,
-        // CAP_SYS_BOOT is intentionally retained for reboot(2) in the PID namespace.
-        Capability::CAP_MAC_ADMIN,
-        Capability::CAP_MAC_OVERRIDE,
-        Capability::CAP_AUDIT_CONTROL,
-        Capability::CAP_AUDIT_READ,
-        Capability::CAP_DAC_READ_SEARCH,
-        Capability::CAP_BLOCK_SUSPEND,
-        Capability::CAP_WAKE_ALARM,
-    ]);
-    for capability in &dangerous {
-        caps::drop(None, CapSet::Bounding, *capability)
-            .with_context(|| format!("failed to drop {capability:?} from bounding set"))?;
-    }
-    for set in [
-        CapSet::Effective,
-        CapSet::Permitted,
-        CapSet::Inheritable,
-        CapSet::Ambient,
-    ] {
-        let mut current = caps::read(None, set)?;
-        current.retain(|capability| !dangerous.contains(capability));
-        caps::set(None, set, &current)?;
     }
     Ok(())
 }

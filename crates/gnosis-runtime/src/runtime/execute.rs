@@ -138,8 +138,6 @@ impl Runtime {
                     drop(console.master);
                     slave
                 });
-                security::drop_dangerous_capabilities()
-                    .unwrap_or_else(|error| exec_failure(&error.to_string()));
                 security::install_seccomp(&self.config.container.security)
                     .unwrap_or_else(|error| exec_failure(&error.to_string()));
                 // A child created after setns(CLONE_NEWPID) enters the target PID namespace.

@@ -515,7 +515,6 @@ impl Runtime {
             &self.config.container.android,
         )?;
         security::harden_mounts(&self.config.container.security)?;
-        security::drop_dangerous_capabilities()?;
         security::install_seccomp(&self.config.container.security)?;
 
         let init =
