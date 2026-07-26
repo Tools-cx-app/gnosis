@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File},
     io::Read,
-    os::fd::{AsFd, AsRawFd, OwnedFd},
+    os::fd::{AsRawFd, OwnedFd},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -37,9 +37,8 @@ use crate::{
 };
 
 use super::supervisor::{
-    configure_monitor_signals, configure_parent_death_signal, ignore_foreground_parent_signals,
-    is_reboot_status, read_retry, redirect_stdio_to_null, reset_init_signals, wait_status_code,
-    waitpid_retry,
+    configure_monitor_signals, ignore_foreground_parent_signals, is_reboot_status, read_retry,
+    redirect_stdio_to_null, reset_init_signals, wait_status_code, waitpid_retry,
 };
 
 impl Runtime {
@@ -156,7 +155,6 @@ impl Runtime {
                             );
                             std::process::exit(125);
                         });
-                        let generation_parent = getpid();
                         // SAFETY: the generation worker is single-threaded and the child immediately boots.
                         match unsafe { fork() }.unwrap_or_else(|error| {
                             eprintln!("gnosis generation: failed to fork init: {error}");
@@ -185,7 +183,6 @@ impl Runtime {
                                 drop(result_writer);
                                 drop(network_writer);
                                 drop(boot_reader);
-                                configure_parent_death_signal(generation_parent);
                                 reset_init_signals();
                                 self.boot(
                                     &boot_writer,

@@ -94,17 +94,6 @@ pub(super) fn reset_init_signals() {
     }
 }
 
-#[allow(unsafe_code)]
-pub(super) fn configure_parent_death_signal(expected_parent: Pid) {
-    // SAFETY: PR_SET_PDEATHSIG takes integer arguments only.
-    if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } == -1 {
-        std::process::exit(125);
-    }
-    if nix::unistd::getppid() != expected_parent {
-        std::process::exit(125);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
