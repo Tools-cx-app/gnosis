@@ -108,21 +108,22 @@ impl Runtime {
                     drop(receiver);
                     sender
                 });
+                for (name, namespace) in &namespaces {
+                    setns(namespace.as_fd(), CloneFlags::empty()).unwrap_or_else(|error| {
+                        exec_failure(&format!("failed to join {name} namespace: {error}"))
+                    });
+                }
                 let cgroup = Cgroup::create(
                     &self.workdir,
                     &self.config.container.name,
                     &self.config.container.resources,
+                    false,
                     false,
                 )
                 .unwrap_or_else(|error| exec_failure(&error.to_string()));
                 cgroup
                     .attach(getpid().as_raw())
                     .unwrap_or_else(|error| exec_failure(&error.to_string()));
-                for (name, namespace) in &namespaces {
-                    setns(namespace.as_fd(), CloneFlags::empty()).unwrap_or_else(|error| {
-                        exec_failure(&format!("failed to join {name} namespace: {error}"))
-                    });
-                }
                 let console = terminal_sender.map(|sender| {
                     let console = terminal::Console::open()
                         .unwrap_or_else(|error| exec_failure(&error.to_string()));

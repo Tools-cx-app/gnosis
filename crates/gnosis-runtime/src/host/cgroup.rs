@@ -17,6 +17,7 @@ impl Cgroup {
         name: &str,
         resources: &ResourceConfig,
         required: bool,
+        bootstrap: bool,
     ) -> Result<Self> {
         if !required
             && resources.memory_bytes.is_none()
@@ -28,7 +29,7 @@ impl Cgroup {
                 unified: false,
             });
         }
-        let Some(root) = ensure_cgroup2_root()? else {
+        let Some(root) = ensure_cgroup2_root(bootstrap)? else {
             ensure!(
                 resources.memory_bytes.is_none()
                     && resources.cpu_quota.is_none()
@@ -89,16 +90,20 @@ impl Cgroup {
     }
 }
 
-fn ensure_cgroup2_root() -> Result<Option<PathBuf>> {
+fn ensure_cgroup2_root(bootstrap: bool) -> Result<Option<PathBuf>> {
     if let Some(root) = cgroup2_root() {
         return Ok(Some(root));
+    }
+    if !bootstrap {
+        return Ok(None);
     }
 
     let root = PathBuf::from("/sys/fs/cgroup");
     fs::create_dir_all(&root)?;
     let current = filesystem_magic(&root)?;
+    let mut mounted_tmpfs = false;
     if current != Some(libc::TMPFS_MAGIC) {
-        let _ = nix::mount::mount(
+        nix::mount::mount(
             Some("none"),
             &root,
             Some("tmpfs"),
@@ -106,9 +111,11 @@ fn ensure_cgroup2_root() -> Result<Option<PathBuf>> {
                 | nix::mount::MsFlags::MS_NODEV
                 | nix::mount::MsFlags::MS_NOEXEC,
             Some("mode=755,size=16M"),
-        );
+        )
+        .context("failed to mount cgroup tmpfs base")?;
+        mounted_tmpfs = true;
     }
-    let _ = nix::mount::mount(
+    if nix::mount::mount(
         Some("none"),
         &root,
         Some("cgroup2"),
@@ -116,8 +123,15 @@ fn ensure_cgroup2_root() -> Result<Option<PathBuf>> {
             | nix::mount::MsFlags::MS_NODEV
             | nix::mount::MsFlags::MS_NOEXEC,
         None::<&str>,
-    );
-    Ok(cgroup2_root().or(Some(root)).filter(|path| path.join("cgroup.controllers").exists()))
+    )
+    .is_err()
+    {
+        if mounted_tmpfs {
+            let _ = nix::mount::umount(&root);
+        }
+        return Ok(None);
+    }
+    Ok(cgroup2_root().filter(|path| path.join("cgroup.controllers").exists()))
 }
 
 fn cgroup2_root() -> Option<PathBuf> {

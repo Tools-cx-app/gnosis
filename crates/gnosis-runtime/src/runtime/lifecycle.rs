@@ -115,8 +115,10 @@ impl Runtime {
         #[cfg(target_os = "android")]
         let _selinux = android::SelinuxGuard::apply(&self.config.container.android, &self.workdir)?;
         let host_netns = File::open("/proc/self/ns/net")?;
-        unshare(CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWIPC)
-            .context("failed to create UTS/IPC namespaces")?;
+        unshare(CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWNS)
+            .context("failed to create UTS/IPC/mount namespaces")?;
+        mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
+            .context("failed to make monitor mount tree private")?;
         let rootfs = self.rootfs.prepare()?;
         let init_system = self.init.detect(rootfs.as_ref());
         let mut cgroup = Cgroup::create(
@@ -124,6 +126,7 @@ impl Runtime {
             &self.config.container.name,
             &self.config.container.resources,
             init_system == init::InitSystem::Systemd,
+            true,
         )?;
         let uuid = self.config.container.uuid.unwrap_or_else(Uuid::new_v4);
         let host_boot_id = host_boot_id()?;
@@ -560,19 +563,7 @@ impl Runtime {
 
         let init =
             std::ffi::CString::new(self.config.container.init.as_os_str().as_encoded_bytes())?;
-        let mut argv = vec![init.clone()];
-        if init_system == init::InitSystem::Systemd {
-            argv.push(std::ffi::CString::new(if host_cgroup_v2 {
-                "systemd.unified_cgroup_hierarchy=1"
-            } else {
-                "systemd.unified_cgroup_hierarchy=0"
-            })?);
-            if !host_cgroup_v2 {
-                argv.push(std::ffi::CString::new(
-                    "systemd.legacy_systemd_cgroup_controller=1",
-                )?);
-            }
-        }
+        let argv = [init.clone()];
         let env = environment::container_environment(
             &self.config.container.environment,
             &self.config.container.android,
