@@ -117,7 +117,25 @@ pub fn drop_dangerous_capabilities() -> Result<()> {
 #[allow(unsafe_code)]
 #[allow(clippy::too_many_lines)]
 pub fn install_seccomp(config: &SecurityConfig) -> Result<()> {
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        all(not(target_os = "android"), not(target_env = "musl"))
+    ))]
     let mut blocked = vec![
+        libc::SYS_init_module,
+        libc::SYS_finit_module,
+        libc::SYS_delete_module,
+        libc::SYS_kexec_load,
+        libc::SYS_settimeofday,
+        libc::SYS_adjtimex,
+        libc::SYS_clock_settime,
+        libc::SYS_clock_adjtime,
+    ];
+    #[cfg(not(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        all(not(target_os = "android"), not(target_env = "musl"))
+    )))]
+    let blocked = vec![
         libc::SYS_init_module,
         libc::SYS_finit_module,
         libc::SYS_delete_module,
