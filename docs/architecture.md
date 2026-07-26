@@ -12,6 +12,25 @@ crates/
 The `gnosis` package produces the command-line binary. The two library
 crates are internal implementation boundaries.
 
+Dependencies flow in one direction: the CLI uses the runtime and
+configuration crates, while the runtime depends on configuration. Host and
+container implementation details remain private to `gnosis-runtime`.
+
+## Configuration modules
+
+The configuration crate keeps its public API in `lib.rs` and uses two
+implementation modules. Related loading and validation helpers stay together
+to keep navigation local:
+
+```text
+src/
+  model.rs   serializable configuration schema and defaults
+  config.rs  loading, path resolution, validation, and environment parsing
+```
+
+Callers import schema types from `gnosis_config`; the internal module layout
+does not leak into the CLI or runtime.
+
 ## Lifecycle
 
 A start operation validates configuration, locks the container identity,
@@ -41,6 +60,7 @@ src/
 The main modules are:
 
 - `runtime/lifecycle.rs`: start, monitor, boot generations, shutdown, and cleanup
+- `runtime/boot.rs`: namespace-internal mounts, pivot, environment, and init execution
 - `runtime/supervisor.rs`: wait/retry, signal policy, and child supervision helpers
 - `runtime/state.rs`: public state types, secure persistence, usage, and recovery
 - `runtime/execute.rs`: namespace entry, command execution, and interactive login
