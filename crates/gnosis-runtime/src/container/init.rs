@@ -37,6 +37,7 @@ pub(crate) fn prepare_runtime(system: InitSystem) -> Result<()> {
     fs::create_dir_all("/run/systemd/journal")?;
     fs::create_dir_all("/run/systemd/system")?;
     fs::write("/run/systemd/container", "gnosis")?;
+    mask_journald_credentials()?;
     std::os::unix::fs::symlink(
         "/dev/null",
         "/run/systemd/system/systemd-journald-audit.socket",
@@ -49,6 +50,15 @@ pub(crate) fn prepare_runtime(system: InitSystem) -> Result<()> {
     fs::write(
         "/run/systemd/journald.conf.d/gnosis.conf",
         "[Journal]\nReadKMsg=no\nAudit=no\nStorage=volatile\n",
+    )?;
+    Ok(())
+}
+
+fn mask_journald_credentials() -> Result<()> {
+    fs::create_dir_all("/run/systemd/system/systemd-journald.service.d")?;
+    fs::write(
+        "/run/systemd/system/systemd-journald.service.d/gnosis.conf",
+        "[Service]\nImportCredential=\n",
     )?;
     Ok(())
 }
