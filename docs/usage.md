@@ -60,6 +60,9 @@ sudo gnosis --config debian.toml scan
 procfs for namespace PID 1 processes and reconstructs missing state only when
 the in-container identity and root-owned recovery record agree.
 
+`usage` prints human-readable key/value lines for uptime, memory, and process
+counts.
+
 ## Host checks
 
 ```bash

@@ -74,9 +74,9 @@ fn main() -> Result<()> {
         Commands::Pid => println!("{}", runtime.pid()?),
         Commands::Usage => {
             let usage = runtime.usage()?;
-            println!("UPTIME={}", usage.uptime_seconds);
-            println!("RAM_USED_KB={}", usage.memory_kb);
-            println!("PROCESSES={}", usage.processes);
+            println!("uptime: {}s", usage.uptime_seconds);
+            println!("memory: {} KiB", usage.memory_kb);
+            println!("processes: {}", usage.processes);
         }
         Commands::Show => {
             println!("NAME\tPID\tROOTFS");

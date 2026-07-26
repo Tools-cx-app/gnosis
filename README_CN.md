@@ -68,7 +68,7 @@ enter [USER]           进入交互式登录，默认用户为 root
 run COMMAND...          执行非交互命令
 info                    显示详细运行状态
 pid                     输出容器 init PID
-usage                   输出运行时间、内存和进程统计
+usage                   显示运行时间、内存和进程统计
 show                    列出同一 workdir 中的容器
 scan                    验证运行进程并恢复缺失状态
 check                   检查主机能力

@@ -74,7 +74,7 @@ enter [USER]           Open an interactive login, defaulting to root
 run COMMAND...          Run a non-interactive command
 info                    Show detailed live state
 pid                     Print the container init PID
-usage                   Print uptime, memory, and process counts
+usage                   Show uptime, memory, and process counts
 show                    List containers in the configured work directory
 scan                    Recover missing state for validated live containers
 check                   Probe required host capabilities
