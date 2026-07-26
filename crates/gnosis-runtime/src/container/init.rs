@@ -29,6 +29,30 @@ impl Init {
     }
 }
 
+pub(crate) fn prepare_runtime(system: InitSystem) -> Result<()> {
+    if system != InitSystem::Systemd {
+        return Ok(());
+    }
+
+    fs::create_dir_all("/run/systemd/journal")?;
+    fs::create_dir_all("/run/systemd/system")?;
+    fs::write("/run/systemd/container", "gnosis")?;
+    std::os::unix::fs::symlink(
+        "/dev/null",
+        "/run/systemd/system/systemd-journald-audit.socket",
+    )?;
+    std::os::unix::fs::symlink(
+        "/dev/null",
+        "/run/systemd/system/systemd-networkd-wait-online.service",
+    )?;
+    fs::create_dir_all("/run/systemd/journald.conf.d")?;
+    fs::write(
+        "/run/systemd/journald.conf.d/gnosis.conf",
+        "[Journal]\nReadKMsg=no\nAudit=no\nStorage=volatile\n",
+    )?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InitSystem {

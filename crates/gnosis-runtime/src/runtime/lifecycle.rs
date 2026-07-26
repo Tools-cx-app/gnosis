@@ -123,6 +123,7 @@ impl Runtime {
             &self.workdir,
             &self.config.container.name,
             &self.config.container.resources,
+            init_system == init::InitSystem::Systemd,
         )?;
         let uuid = self.config.container.uuid.unwrap_or_else(Uuid::new_v4);
         let host_boot_id = host_boot_id()?;
@@ -195,6 +196,8 @@ impl Runtime {
                                     network_reader,
                                     rootfs.as_ref(),
                                     Some(&console),
+                                    init_system,
+                                    cgroup.unified(),
                                     uuid,
                                 )
                                 .unwrap_or_else(|error| {
@@ -367,13 +370,15 @@ impl Runtime {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn boot(
         &self,
         _boot_status: &std::os::fd::OwnedFd,
         network_status: std::os::fd::OwnedFd,
         configured_rootfs: &Path,
         console: Option<&terminal::Console>,
+        init_system: init::InitSystem,
+        host_cgroup_v2: bool,
         uuid: Uuid,
     ) -> Result<()> {
         if let Some(console) = console {
@@ -384,6 +389,10 @@ impl Runtime {
         File::from(network_status).read_to_string(&mut status)?;
         ensure!(!status.is_empty(), "host network setup did not complete");
         Network::setup_child(&self.config, &status)?;
+        if init_system == init::InitSystem::Systemd && host_cgroup_v2 {
+            unshare(CloneFlags::CLONE_NEWCGROUP)
+                .context("failed to create systemd cgroup namespace")?;
+        }
         unshare(CloneFlags::CLONE_NEWNS).context("failed to create mount namespace")?;
         mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
             .context("failed to make mount tree private")?;
@@ -445,6 +454,37 @@ impl Runtime {
             None::<&str>,
         )
         .context("failed to mount sysfs")?;
+        if init_system == init::InitSystem::Systemd {
+            fs::create_dir_all("/sys/fs/cgroup")?;
+            mount(
+                Some("none"),
+                "/sys/fs/cgroup",
+                Some("tmpfs"),
+                MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+                Some("mode=755,size=16M"),
+            )
+            .context("failed to mount systemd cgroup tmpfs base")?;
+            if host_cgroup_v2 {
+                mount(
+                    Some("cgroup2"),
+                    "/sys/fs/cgroup",
+                    Some("cgroup2"),
+                    MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+                    None::<&str>,
+                )
+                .context("failed to mount systemd cgroup2 hierarchy")?;
+            } else {
+                fs::create_dir_all("/sys/fs/cgroup/systemd")?;
+                mount(
+                    Some("cgroup"),
+                    "/sys/fs/cgroup/systemd",
+                    Some("cgroup"),
+                    MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+                    Some("none,name=systemd"),
+                )
+                .context("failed to mount legacy systemd cgroup hierarchy")?;
+            }
+        }
         mount(
             Some("tmpfs"),
             "/run",
@@ -478,7 +518,7 @@ impl Runtime {
             Some("newinstance,ptmxmode=0666,mode=0620,gid=5"),
         )
         .context("failed to mount private devpts")?;
-        for device in ["null", "zero", "random", "urandom", "tty"] {
+        for device in ["null", "zero", "full", "random", "urandom", "tty"] {
             let old = PathBuf::from("/.old_root/dev").join(device);
             let target = PathBuf::from("/dev").join(device);
             File::create(&target)
@@ -510,6 +550,7 @@ impl Runtime {
         fs::write("/run/gnosis/uuid", uuid.to_string())?;
         fs::write("/run/gnosis/version", env!("CARGO_PKG_VERSION"))?;
         fs::write("/run/gnosis/container.toml", toml::to_string(&self.config)?)?;
+        init::prepare_runtime(init_system)?;
         environment::write_profile_environment(
             &self.config.container.environment,
             &self.config.container.android,
@@ -519,7 +560,19 @@ impl Runtime {
 
         let init =
             std::ffi::CString::new(self.config.container.init.as_os_str().as_encoded_bytes())?;
-        let argv = [init.clone()];
+        let mut argv = vec![init.clone()];
+        if init_system == init::InitSystem::Systemd {
+            argv.push(std::ffi::CString::new(if host_cgroup_v2 {
+                "systemd.unified_cgroup_hierarchy=1"
+            } else {
+                "systemd.unified_cgroup_hierarchy=0"
+            })?);
+            if !host_cgroup_v2 {
+                argv.push(std::ffi::CString::new(
+                    "systemd.legacy_systemd_cgroup_controller=1",
+                )?);
+            }
+        }
         let env = environment::container_environment(
             &self.config.container.environment,
             &self.config.container.android,
