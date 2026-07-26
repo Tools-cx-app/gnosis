@@ -40,18 +40,11 @@ const TIOCGPTN_IOCTL: libc::Ioctl = libc::TIOCGPTN;
 #[cfg(target_os = "android")]
 const TIOCSPTLCK_IOCTL: libc::Ioctl = libc::_IOW::<libc::c_int>('T' as libc::c_uint, 0x31);
 
-#[cfg(not(target_os = "android"))]
-const TIOCSPTLCK_IOCTL: libc::Ioctl = libc::TIOCSPTLCK;
-
 #[cfg(target_os = "android")]
 const TIOCGPTPEER_IOCTL: libc::Ioctl = libc::_IO('T' as libc::c_uint, 0x41);
 
-#[cfg(not(target_os = "android"))]
-const TIOCGPTPEER_IOCTL: libc::Ioctl = libc::TIOCGPTPEER;
-
 pub(crate) struct Console {
     pub(crate) master: OwnedFd,
-    pub(crate) slave: OwnedFd,
     pub(crate) slave_path: String,
 }
 
@@ -63,17 +56,20 @@ impl Console {
         } else {
             open_console_pty(winsize.as_ref())?
         };
-        let _ = nix::unistd::fchown(
-            &slave,
-            Some(nix::unistd::Uid::from_raw(0)),
-            Some(nix::unistd::Gid::from_raw(5)),
-        );
         let _ = fchmod(&slave, Mode::from_bits_truncate(0o620));
         Ok(Self {
             slave_path: tty_path(&master)?,
             master,
-            slave,
         })
+    }
+
+    pub(crate) fn open_slave(&self) -> Result<OwnedFd> {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.slave_path)
+            .with_context(|| format!("failed to open PTY slave {}", self.slave_path))
+            .map(Into::into)
     }
 }
 
@@ -538,8 +534,9 @@ mod tests {
     #[test]
     fn allocates_terminal_pair() {
         let console = Console::open().expect("PTY allocation should work");
+        let slave = console.open_slave().expect("PTY slave should reopen");
         assert!(nix::unistd::isatty(&console.master).unwrap());
-        assert!(nix::unistd::isatty(&console.slave).unwrap());
+        assert!(nix::unistd::isatty(&slave).unwrap());
     }
 
     #[test]

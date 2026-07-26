@@ -377,7 +377,8 @@ impl Runtime {
         uuid: Uuid,
     ) -> Result<()> {
         if let Some(console) = console {
-            terminal::configure_child(&console.slave)?;
+            let slave = console.open_slave()?;
+            terminal::configure_child(&slave)?;
         }
         let mut status = String::new();
         File::from(network_status).read_to_string(&mut status)?;

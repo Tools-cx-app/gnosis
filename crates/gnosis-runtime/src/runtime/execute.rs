@@ -125,7 +125,10 @@ impl Runtime {
                 let console = terminal_sender.map(|sender| {
                     let console = terminal::Console::open()
                         .unwrap_or_else(|error| exec_failure(&error.to_string()));
-                    terminal::configure_child(&console.slave)
+                    let slave = console
+                        .open_slave()
+                        .unwrap_or_else(|error| exec_failure(&error.to_string()));
+                    terminal::configure_child(&slave)
                         .unwrap_or_else(|error| exec_failure(&error.to_string()));
                     terminal::ignore_hangup()
                         .unwrap_or_else(|error| exec_failure(&error.to_string()));
@@ -133,7 +136,7 @@ impl Runtime {
                         .unwrap_or_else(|error| exec_failure(&error.to_string()));
                     drop(sender);
                     drop(console.master);
-                    console.slave
+                    slave
                 });
                 security::drop_dangerous_capabilities()
                     .unwrap_or_else(|error| exec_failure(&error.to_string()));
