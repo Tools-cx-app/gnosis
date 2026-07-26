@@ -1,7 +1,7 @@
 use std::{
     fs::{self, File},
     io::Read,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::OwnedFd,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -69,8 +69,14 @@ impl Runtime {
                 let mut payload = String::new();
                 file.read_to_string(&mut payload)
                     .context("failed to read monitor startup result")?;
-                let state: ContainerState = serde_json::from_str(&payload)
-                    .with_context(|| format!("container failed to start: {payload}"))?;
+                let state: ContainerState = match serde_json::from_str(&payload) {
+                    Ok(state) => state,
+                    Err(parse_error) if payload.trim_start().starts_with('{') => {
+                        return Err(parse_error)
+                            .with_context(|| format!("container failed to start: {payload}"));
+                    }
+                    Err(_) => bail!("container failed to start: {payload}"),
+                };
                 drop(lock);
                 if foreground_override || self.config.container.foreground {
                     ignore_foreground_parent_signals()?;
@@ -188,7 +194,7 @@ impl Runtime {
                                     &boot_writer,
                                     network_reader,
                                     rootfs.as_ref(),
-                                    Some(&console.slave),
+                                    Some(&console),
                                     uuid,
                                 )
                                 .unwrap_or_else(|error| {
@@ -367,11 +373,11 @@ impl Runtime {
         _boot_status: &std::os::fd::OwnedFd,
         network_status: std::os::fd::OwnedFd,
         configured_rootfs: &Path,
-        console: Option<&OwnedFd>,
+        console: Option<&terminal::Console>,
         uuid: Uuid,
     ) -> Result<()> {
         if let Some(console) = console {
-            terminal::configure_child(console)?;
+            terminal::configure_child(&console.slave)?;
         }
         let mut status = String::new();
         File::from(network_status).read_to_string(&mut status)?;
@@ -403,6 +409,21 @@ impl Runtime {
         #[cfg(target_os = "android")]
         android::setup_before_pivot(rootfs, &self.config.container.android)?;
         self.validate_bind_targets(rootfs)?;
+        if let Some(console) = console {
+            let target = rootfs.join("dev/console");
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            File::create(&target).context("failed to create rootfs/dev/console")?;
+            mount(
+                Some(console.slave_path.as_str()),
+                &target,
+                None::<&str>,
+                MsFlags::MS_BIND,
+                None::<&str>,
+            )
+            .context("failed to bind foreground PTY to rootfs/dev/console")?;
+        }
         chdir(rootfs).context("failed to enter rootfs")?;
         pivot_root(Path::new("."), Path::new(".old_root")).context("pivot_root failed")?;
         chdir("/").context("failed to enter new root")?;
@@ -456,18 +477,6 @@ impl Runtime {
             Some("newinstance,ptmxmode=0666,mode=0620,gid=5"),
         )
         .context("failed to mount private devpts")?;
-        if let Some(console) = console {
-            File::create("/dev/console").context("failed to create /dev/console")?;
-            let source = format!("/proc/self/fd/{}", console.as_raw_fd());
-            mount(
-                Some(source.as_str()),
-                "/dev/console",
-                None::<&str>,
-                MsFlags::MS_BIND,
-                None::<&str>,
-            )
-            .context("failed to bind foreground PTY to /dev/console")?;
-        }
         for device in ["null", "zero", "random", "urandom", "tty"] {
             let old = PathBuf::from("/.old_root/dev").join(device);
             let target = PathBuf::from("/dev").join(device);

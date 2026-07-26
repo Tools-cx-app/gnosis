@@ -31,9 +31,28 @@ use crate::container::init::{self, InitSystem};
 
 static FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
+#[cfg(target_os = "android")]
+const TIOCGPTN_IOCTL: libc::Ioctl = libc::_IOR::<libc::c_int>('T' as libc::c_uint, 0x30);
+
+#[cfg(not(target_os = "android"))]
+const TIOCGPTN_IOCTL: libc::Ioctl = libc::TIOCGPTN;
+
+#[cfg(target_os = "android")]
+const TIOCSPTLCK_IOCTL: libc::Ioctl = libc::_IOW::<libc::c_int>('T' as libc::c_uint, 0x31);
+
+#[cfg(not(target_os = "android"))]
+const TIOCSPTLCK_IOCTL: libc::Ioctl = libc::TIOCSPTLCK;
+
+#[cfg(target_os = "android")]
+const TIOCGPTPEER_IOCTL: libc::Ioctl = libc::_IO('T' as libc::c_uint, 0x41);
+
+#[cfg(not(target_os = "android"))]
+const TIOCGPTPEER_IOCTL: libc::Ioctl = libc::TIOCGPTPEER;
+
 pub(crate) struct Console {
     pub(crate) master: OwnedFd,
     pub(crate) slave: OwnedFd,
+    pub(crate) slave_path: String,
 }
 
 impl Console {
@@ -50,8 +69,21 @@ impl Console {
             Some(nix::unistd::Gid::from_raw(5)),
         );
         let _ = fchmod(&slave, Mode::from_bits_truncate(0o620));
-        Ok(Self { master, slave })
+        Ok(Self {
+            slave_path: tty_path(&master)?,
+            master,
+            slave,
+        })
     }
+}
+
+#[allow(unsafe_code)]
+fn tty_path(master: &OwnedFd) -> Result<String> {
+    let mut number = 0_u32;
+    if unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTN_IOCTL, &mut number) } < 0 {
+        return Err(io::Error::last_os_error()).context("failed to resolve PTY slave path");
+    }
+    Ok(format!("/dev/pts/{number}"))
 }
 
 #[allow(unsafe_code)]
@@ -169,10 +201,6 @@ fn open_console_pty(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
 fn open_console_pty(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
     use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt};
 
-    const TIOCSPTLCK: libc::c_int = libc::_IOW::<libc::c_int>('T' as libc::c_uint, 0x31);
-    const TIOCGPTPEER: libc::c_int = libc::_IO('T' as libc::c_uint, 0x41);
-    const TIOCGPTN: libc::c_int = libc::_IOR::<libc::c_int>('T' as libc::c_uint, 0x30);
-
     let flags = libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC;
     let master = OpenOptions::new()
         .read(true)
@@ -181,15 +209,15 @@ fn open_console_pty(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
         .open("/dev/ptmx")
         .context("failed to open Android PTY master")?;
     let unlock = 0;
-    let _ = unsafe { libc::ioctl(master.as_raw_fd(), TIOCSPTLCK, &unlock) };
+    let _ = unsafe { libc::ioctl(master.as_raw_fd(), TIOCSPTLCK_IOCTL, &unlock) };
 
-    let peer = unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTPEER, flags) };
+    let peer = unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTPEER_IOCTL, flags) };
     let slave: OwnedFd = if peer >= 0 {
         // SAFETY: TIOCGPTPEER returned a new descriptor owned by this process.
         unsafe { OwnedFd::from_raw_fd(peer) }
     } else {
         let mut number = 0_u32;
-        if unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTN, &mut number) } < 0 {
+        if unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTN_IOCTL, &mut number) } < 0 {
             return Err(io::Error::last_os_error()).context("failed to resolve Android PTY number");
         }
         let path = format!("/dev/pts/{number}");
