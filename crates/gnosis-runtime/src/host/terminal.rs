@@ -30,6 +30,7 @@ use super::process::ProcessHandle;
 use crate::container::init::{self, InitSystem};
 
 static FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
+const PTY_MODE: Mode = Mode::from_bits_truncate(0o620);
 
 #[cfg(target_os = "android")]
 const TIOCGPTN_IOCTL: libc::Ioctl = libc::_IOR::<libc::c_int>('T' as libc::c_uint, 0x30);
@@ -56,7 +57,8 @@ impl Console {
         } else {
             open_console_pty(winsize.as_ref())?
         };
-        let _ = fchmod(&slave, Mode::from_bits_truncate(0o620));
+        // Keep the broker-owned UID on the host PTY, but pin the expected tty mode.
+        let _ = fchmod(&slave, PTY_MODE);
         Ok(Self {
             slave_path: tty_path(&master)?,
             master,
@@ -64,13 +66,17 @@ impl Console {
     }
 
     pub(crate) fn open_slave(&self) -> Result<OwnedFd> {
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&self.slave_path)
-            .with_context(|| format!("failed to open PTY slave {}", self.slave_path))
-            .map(Into::into)
+        open_pty_slave(&self.slave_path)
     }
+}
+
+fn open_pty_slave(path: &str) -> Result<OwnedFd> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("failed to open PTY slave {path}"))
+        .map(Into::into)
 }
 
 #[allow(unsafe_code)]
@@ -217,13 +223,7 @@ fn open_console_pty(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
             return Err(io::Error::last_os_error()).context("failed to resolve Android PTY number");
         }
         let path = format!("/dev/pts/{number}");
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC)
-            .open(&path)
-            .with_context(|| format!("failed to open Android PTY slave {path}"))?
-            .into()
+        open_pty_slave_android(&path)?
     };
     if let Some(winsize) = winsize {
         let result = unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, winsize) };
@@ -235,6 +235,19 @@ fn open_console_pty(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
         master: master.into(),
         slave,
     })
+}
+
+#[cfg(target_os = "android")]
+fn open_pty_slave_android(path: &str) -> Result<OwnedFd> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC)
+        .open(path)
+        .with_context(|| format!("failed to open Android PTY slave {path}"))
+        .map(Into::into)
 }
 
 #[allow(unsafe_code)]
