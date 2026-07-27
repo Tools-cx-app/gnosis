@@ -60,14 +60,11 @@ jobs:
       - name: Build
         run: cargo ndk --platform 21 --target ${{ matrix.abi }} build --workspace --release --locked
 
-      - name: Package artifact
-        run: tar -C target/${{ matrix.target }}/release -czf gnosis-android-${{ matrix.abi }}.tar.gz gnosis
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: gnosis-android-${{ matrix.abi }}
-          path: gnosis-android-${{ matrix.abi }}.tar.gz
+          path: target/${{ matrix.target }}/release/gnosis
           if-no-files-found: error
 
   linux:
@@ -105,12 +102,9 @@ jobs:
       - name: Build
         run: cargo build --workspace --release --locked --target ${{ matrix.target }}
 
-      - name: Package artifact
-        run: tar -C target/${{ matrix.target }}/release -czf gnosis-linux-${{ matrix.target }}.tar.gz gnosis
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: gnosis-linux-${{ matrix.target }}
-          path: gnosis-linux-${{ matrix.target }}.tar.gz
+          path: target/${{ matrix.target }}/release/gnosis
           if-no-files-found: error
