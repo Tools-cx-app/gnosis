@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use gnosis_config::ResourceConfig;
+use nix::sys::statfs::{TMPFS_MAGIC, statfs};
 
 pub struct Cgroup {
     path: Option<PathBuf>,
@@ -100,9 +101,9 @@ fn ensure_cgroup2_root(bootstrap: bool) -> Result<Option<PathBuf>> {
 
     let root = PathBuf::from("/sys/fs/cgroup");
     fs::create_dir_all(&root)?;
-    let current = filesystem_magic(&root)?;
+    let stat = statfs(&root)?;
     let mut mounted_tmpfs = false;
-    if current != Some(libc::TMPFS_MAGIC) {
+    if stat.filesystem_type() != TMPFS_MAGIC {
         nix::mount::mount(
             Some("none"),
             &root,
@@ -144,35 +145,6 @@ fn cgroup2_root() -> Option<PathBuf> {
         }
         fields.get(4).map(PathBuf::from)
     })
-}
-
-#[allow(unsafe_code)]
-fn filesystem_magic(path: &Path) -> Result<Option<libc::c_long>> {
-    let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
-    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: c_path is NUL-terminated and stat points to valid writable memory.
-    let result = unsafe { libc::statfs(c_path.as_ptr(), stat.as_mut_ptr()) };
-    if result == -1 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Ok(None);
-        }
-        return Err(error).with_context(|| format!("failed to statfs {}", path.display()));
-    }
-    // SAFETY: statfs succeeded and initialized stat.
-    let stat = unsafe { stat.assume_init() };
-    #[cfg(target_os = "android")]
-    {
-        Ok(Some(stat.f_type.cast_signed()))
-    }
-    #[cfg(all(not(target_os = "android"), target_env = "musl"))]
-    {
-        Ok(Some(stat.f_type as libc::c_long))
-    }
-    #[cfg(all(not(target_os = "android"), not(target_env = "musl")))]
-    {
-        Ok(Some(stat.f_type))
-    }
 }
 
 impl Drop for Cgroup {
