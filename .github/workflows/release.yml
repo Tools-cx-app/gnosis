@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate tag version
+        run: |
+          package_version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "gnosis") | .version')
+          tag_version=${GITHUB_REF_NAME#v}
+          if [ "$package_version" != "$tag_version" ]; then
+            echo "Tag version $tag_version does not match Cargo version $package_version" >&2
+            exit 1
+          fi
+
+  android:
+    name: Android (${{ matrix.abi }})
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+          - abi: x86_64
+            target: x86_64-linux-android
+          - abi: x86
+            target: i686-linux-android
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-android-${{ matrix.abi }}
+
+      - name: Build
+        run: cargo ndk --platform 21 --target ${{ matrix.abi }} build --workspace --release --locked
+
+      - name: Package
+        env:
+          ARCHIVE: gnosis-${{ github.ref_name }}-android-${{ matrix.abi }}
+        run: |
+          mkdir "$ARCHIVE"
+          cp "target/${{ matrix.target }}/release/gnosis" LICENSE README.md README_CN.md gnosis.example.toml "$ARCHIVE/"
+          tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnosis-${{ github.ref_name }}-android-${{ matrix.abi }}
+          path: gnosis-${{ github.ref_name }}-android-${{ matrix.abi }}.tar.gz
+          if-no-files-found: error
+
+  linux:
+    name: Linux (${{ matrix.target }})
+    needs: validate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+          - riscv64gc-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross-compilation toolchain
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+          runner: none
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        env:
+          ARCHIVE: gnosis-${{ github.ref_name }}-linux-${{ matrix.target }}
+        run: |
+          mkdir "$ARCHIVE"
+          cp "target/${{ matrix.target }}/release/gnosis" LICENSE README.md README_CN.md gnosis.example.toml "$ARCHIVE/"
+          tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnosis-${{ github.ref_name }}-linux-${{ matrix.target }}
+          path: gnosis-${{ github.ref_name }}-linux-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [android, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: gnosis-${{ github.ref_name }}-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true
