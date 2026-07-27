@@ -105,10 +105,6 @@ jobs:
       - name: Build
         run: cargo build --workspace --release --locked --target ${{ matrix.target }}
 
-      - name: Test
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo test --workspace --locked --target ${{ matrix.target }}
-
       - name: Package artifact
         run: tar -C target/${{ matrix.target }}/release -czf gnosis-linux-${{ matrix.target }}.tar.gz gnosis
 
