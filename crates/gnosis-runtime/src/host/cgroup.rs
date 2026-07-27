@@ -165,7 +165,11 @@ fn filesystem_magic(path: &Path) -> Result<Option<libc::c_long>> {
     {
         Ok(Some(stat.f_type.cast_signed()))
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(not(target_os = "android"), target_env = "musl"))]
+    {
+        Ok(Some(stat.f_type as libc::c_long))
+    }
+    #[cfg(all(not(target_os = "android"), not(target_env = "musl")))]
     {
         Ok(Some(stat.f_type))
     }
