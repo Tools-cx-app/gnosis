@@ -38,6 +38,8 @@ pub(crate) fn prepare_runtime(system: InitSystem) -> Result<()> {
     fs::create_dir_all("/run/systemd/system")?;
     fs::write("/run/systemd/container", "gnosis")?;
     mask_journald_credentials()?;
+    #[cfg(target_os = "android")]
+    override_docker_startup()?;
     std::os::unix::fs::symlink(
         "/dev/null",
         "/run/systemd/system/systemd-journald-audit.socket",
@@ -51,6 +53,19 @@ pub(crate) fn prepare_runtime(system: InitSystem) -> Result<()> {
         "/run/systemd/journald.conf.d/gnosis.conf",
         "[Journal]\nReadKMsg=no\nAudit=no\nStorage=volatile\n",
     )?;
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn override_docker_startup() -> Result<()> {
+    const OVERRIDE: &str = "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd \
+        -H fd:// --containerd=/run/containerd/containerd.sock --ip6tables=false --iptables=false\n";
+
+    for unit in ["docker.service", "dockerd.service"] {
+        let directory = format!("/run/systemd/system/{unit}.d");
+        fs::create_dir_all(&directory)?;
+        fs::write(format!("{directory}/gnosis.conf"), OVERRIDE)?;
+    }
     Ok(())
 }
 
