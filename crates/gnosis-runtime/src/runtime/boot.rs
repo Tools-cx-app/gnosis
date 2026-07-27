@@ -59,6 +59,17 @@ impl Runtime {
             None,
         )
         .context("failed to bind rootfs")?;
+        // Directory rootfs paths commonly live below a nosuid host mount (notably
+        // /data on Android). Keep those host flags from disabling setuid tools such
+        // as chsh inside this private mount namespace.
+        mount(
+            None,
+            lower_rootfs,
+            None,
+            MountFlags::BIND | MountFlags::REMOUNT,
+            None,
+        )
+        .context("failed to enable rootfs execution privileges")?;
         let volatile_root;
         let rootfs = if self.config.container.volatile {
             volatile_root = self.setup_volatile_root(lower_rootfs)?;
