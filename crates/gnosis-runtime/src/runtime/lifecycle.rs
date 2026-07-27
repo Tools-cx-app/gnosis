@@ -2,21 +2,15 @@ use std::{
     fs::File,
     io::Read,
     os::fd::OwnedFd,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use gnosis_config::NetworkMode;
-use nix::{
-    fcntl::OFlag,
-    mount::{MsFlags, mount},
-    sched::{CloneFlags, unshare},
-    sys::{
-        signal::{Signal, kill},
-        wait::{WaitStatus, waitpid},
-    },
-    unistd::{ForkResult, Pid, fork, getpid, setsid},
+use gnosis_helper::{
+    ForkResult, MountFlags, NamespaceFlags, Signal, WaitStatus, current_pid, fork, kill, mount,
+    pipe, setsid, unshare, waitpid, write,
 };
 use uuid::Uuid;
 
@@ -59,8 +53,7 @@ impl Runtime {
             self.config.container.name
         );
 
-        let (reader, writer) =
-            nix::unistd::pipe2(OFlag::O_CLOEXEC).context("failed to create startup pipe")?;
+        let (reader, writer) = pipe().context("failed to create startup pipe")?;
         // SAFETY: the CLI is single-threaded at this point and the child immediately enters the monitor path.
         match unsafe { fork() }.context("failed to fork monitor")? {
             ForkResult::Parent { child } => {
@@ -80,7 +73,7 @@ impl Runtime {
                 drop(lock);
                 if foreground_override || self.config.container.foreground {
                     ignore_foreground_parent_signals()?;
-                    let status = waitpid(child, None).context("failed waiting for monitor")?;
+                    let status = waitpid(child, false).context("failed waiting for monitor")?;
                     ensure!(
                         matches!(status, WaitStatus::Exited(_, 0)),
                         "container exited with {status:?}"
@@ -115,10 +108,16 @@ impl Runtime {
         #[cfg(target_os = "android")]
         let _selinux = android::SelinuxGuard::apply(&self.config.container.android, &self.workdir)?;
         let host_netns = File::open("/proc/self/ns/net")?;
-        unshare(CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWNS)
+        unshare(NamespaceFlags::UTS | NamespaceFlags::IPC | NamespaceFlags::MOUNT)
             .context("failed to create UTS/IPC/mount namespaces")?;
-        mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
-            .context("failed to make monitor mount tree private")?;
+        mount(
+            None,
+            Path::new("/"),
+            None,
+            MountFlags::REC | MountFlags::PRIVATE,
+            None,
+        )
+        .context("failed to make monitor mount tree private")?;
         let rootfs = self.rootfs.prepare()?;
         let init_system = self.init.detect(rootfs.as_ref());
         let mut cgroup = Cgroup::create(
@@ -130,21 +129,19 @@ impl Runtime {
         )?;
         let uuid = self.config.container.uuid.unwrap_or_else(Uuid::new_v4);
         let host_boot_id = host_boot_id()?;
-        let monitor_pid = getpid().as_raw();
+        let monitor_pid = current_pid();
         let monitor_start_time = process_start_time(monitor_pid)?;
         let mut generation = 0_u64;
         let mut first_boot = true;
         let mut generation_lock = None;
 
         loop {
-            let (boot_reader, boot_writer) =
-                nix::unistd::pipe2(OFlag::O_CLOEXEC).context("failed to create boot pipe")?;
+            let (boot_reader, boot_writer) = pipe().context("failed to create boot pipe")?;
             let (network_reader, mut network_writer) =
-                nix::unistd::pipe2(OFlag::O_CLOEXEC).context("failed to create network pipe")?;
-            let (pid_reader, mut pid_writer) =
-                nix::unistd::pipe2(OFlag::O_CLOEXEC).context("failed to create PID pipe")?;
+                pipe().context("failed to create network pipe")?;
+            let (pid_reader, mut pid_writer) = pipe().context("failed to create PID pipe")?;
             let (result_reader, mut result_writer) =
-                nix::unistd::pipe2(OFlag::O_CLOEXEC).context("failed to create result pipe")?;
+                pipe().context("failed to create result pipe")?;
 
             // SAFETY: the single-threaded monitor forks a generation worker which only unshares and forks init.
             let intermediate =
@@ -155,9 +152,9 @@ impl Runtime {
                         drop(generation_lock.take());
                         drop(pid_reader);
                         drop(result_reader);
-                        let mut flags = CloneFlags::CLONE_NEWPID;
+                        let mut flags = NamespaceFlags::PID;
                         if self.config.container.network != NetworkMode::Host {
-                            flags |= CloneFlags::CLONE_NEWNET;
+                            flags |= NamespaceFlags::NETWORK;
                         }
                         unshare(flags).unwrap_or_else(|error| {
                             eprintln!(
@@ -175,7 +172,7 @@ impl Runtime {
                                 drop(network_writer);
                                 drop(boot_reader);
                                 drop(boot_writer);
-                                nix::unistd::write(&mut pid_writer, &child.as_raw().to_ne_bytes())
+                                write(&mut pid_writer, &child.to_ne_bytes())
                                     .unwrap_or_else(|_| std::process::exit(125));
                                 drop(pid_writer);
                                 if !foreground {
@@ -184,7 +181,7 @@ impl Runtime {
                                 let status = waitpid_retry(child)
                                     .unwrap_or_else(|_| std::process::exit(125));
                                 let result = if is_reboot_status(status) { b'R' } else { b'E' };
-                                nix::unistd::write(&mut result_writer, &[result])
+                                write(&mut result_writer, &[result])
                                     .unwrap_or_else(|_| std::process::exit(125));
                                 std::process::exit(wait_status_code(status));
                             }
@@ -205,7 +202,7 @@ impl Runtime {
                                 )
                                 .unwrap_or_else(|error| {
                                     let message = format!("{error:#}");
-                                    let _ = nix::unistd::write(&boot_writer, message.as_bytes());
+                                    let _ = write(&boot_writer, message.as_bytes());
                                     eprintln!("gnosis boot: {error:#}");
                                     std::process::exit(127);
                                 });
@@ -223,40 +220,38 @@ impl Runtime {
             File::from(pid_reader)
                 .read_exact(&mut pid_bytes)
                 .context("generation worker failed to report init PID")?;
-            let init_pid = Pid::from_raw(i32::from_ne_bytes(pid_bytes));
+            let init_pid = i32::from_ne_bytes(pid_bytes);
             let init_process = match ProcessHandle::open(init_pid) {
                 Ok(process) => process,
                 Err(error) => {
-                    let _ = kill(intermediate, Signal::SIGKILL);
-                    let _ = waitpid(intermediate, None);
+                    let _ = kill(intermediate, Signal::Kill);
+                    let _ = waitpid(intermediate, false);
                     return Err(error);
                 }
             };
-            if process_parent(init_pid.as_raw()).ok() != Some(intermediate.as_raw()) {
-                let _ = kill(intermediate, Signal::SIGKILL);
-                let _ = waitpid(intermediate, None);
+            if process_parent(init_pid).ok() != Some(intermediate) {
+                let _ = kill(intermediate, Signal::Kill);
+                let _ = waitpid(intermediate, false);
                 bail!("reported init PID is no longer a child of the generation worker");
             }
 
-            let network = match Network::setup_host(&self.config, init_pid.as_raw(), &host_netns) {
+            let network = match Network::setup_host(&self.config, init_pid, &host_netns) {
                 Ok(network) => network,
                 Err(error) => {
-                    let _ = init_process.send_signal(Signal::SIGKILL);
-                    let _ = waitpid(intermediate, None);
+                    let _ = init_process.send_signal(Signal::Kill);
+                    let _ = waitpid(intermediate, false);
                     return Err(error);
                 }
             };
-            if let Err(error) = cgroup.attach(init_pid.as_raw()) {
-                let _ = init_process.send_signal(Signal::SIGKILL);
-                let _ = waitpid(intermediate, None);
+            if let Err(error) = cgroup.attach(init_pid) {
+                let _ = init_process.send_signal(Signal::Kill);
+                let _ = waitpid(intermediate, false);
                 network.cleanup();
                 return Err(error);
             }
-            if let Err(error) =
-                nix::unistd::write(&mut network_writer, network.peer_name().as_bytes())
-            {
-                let _ = init_process.send_signal(Signal::SIGKILL);
-                let _ = waitpid(intermediate, None);
+            if let Err(error) = write(&mut network_writer, network.peer_name().as_bytes()) {
+                let _ = init_process.send_signal(Signal::Kill);
+                let _ = waitpid(intermediate, false);
                 network.cleanup();
                 return Err(error).context("failed to complete generation network handshake");
             }
@@ -266,11 +261,11 @@ impl Runtime {
                 .read_to_string(&mut boot_status)
                 .context("failed to read boot status")?;
             if !boot_status.is_empty() {
-                let _ = init_process.send_signal(Signal::SIGKILL);
-                let _ = waitpid(intermediate, None);
+                let _ = init_process.send_signal(Signal::Kill);
+                let _ = waitpid(intermediate, false);
                 network.cleanup();
                 if first_boot && let Some(startup) = &mut startup {
-                    let _ = nix::unistd::write(startup, boot_status.as_bytes());
+                    let _ = write(startup, boot_status.as_bytes());
                 }
                 bail!("{boot_status}");
             }
@@ -278,13 +273,13 @@ impl Runtime {
             let state = match (|| {
                 Ok::<_, anyhow::Error>(ContainerState {
                     name: self.config.container.name.clone(),
-                    init_pid: init_pid.as_raw(),
+                    init_pid,
                     monitor_pid,
                     rootfs: rootfs.as_ref().to_path_buf(),
                     uuid,
                     host_boot_id: host_boot_id.clone(),
-                    init_start_time: process_start_time(init_pid.as_raw())?,
-                    pid_namespace_inode: namespace_inode(init_pid.as_raw(), "pid")?,
+                    init_start_time: process_start_time(init_pid)?,
+                    pid_namespace_inode: namespace_inode(init_pid, "pid")?,
                     started_at_unix: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
                     monitor_start_time,
                     init_system,
@@ -293,22 +288,22 @@ impl Runtime {
             })() {
                 Ok(state) => state,
                 Err(error) => {
-                    let _ = init_process.send_signal(Signal::SIGKILL);
-                    let _ = waitpid(intermediate, None);
+                    let _ = init_process.send_signal(Signal::Kill);
+                    let _ = waitpid(intermediate, false);
                     network.cleanup();
                     return Err(error);
                 }
             };
             if let Err(error) = self.write_state(&state) {
-                let _ = init_process.send_signal(Signal::SIGKILL);
-                let _ = waitpid(intermediate, None);
+                let _ = init_process.send_signal(Signal::Kill);
+                let _ = waitpid(intermediate, false);
                 network.cleanup();
                 return Err(error);
             }
             drop(generation_lock.take());
             if first_boot {
                 if let Some(startup) = &mut startup {
-                    nix::unistd::write(startup, &serde_json::to_vec(&state)?)
+                    write(startup, &serde_json::to_vec(&state)?)
                         .context("failed to report container PID")?;
                 }
                 drop(startup.take());
@@ -326,13 +321,13 @@ impl Runtime {
                 )
                 .context("foreground console proxy failed")
             } else {
-                waitpid(intermediate, None).context("failed waiting for generation worker")
+                waitpid(intermediate, false).context("failed waiting for generation worker")
             };
             let status = match status {
                 Ok(status) => status,
                 Err(error) => {
-                    let _ = init_process.send_signal(Signal::SIGKILL);
-                    let _ = waitpid(intermediate, None);
+                    let _ = init_process.send_signal(Signal::Kill);
+                    let _ = waitpid(intermediate, false);
                     network.cleanup();
                     self.remove_state_for(&state).ok();
                     cgroup.remove().ok();
@@ -344,7 +339,7 @@ impl Runtime {
                 .context("failed to read generation result")?;
             network.cleanup();
             if result_length != 1 || !matches!(generation_result[0], b'R' | b'E') {
-                let _ = init_process.send_signal(Signal::SIGKILL);
+                let _ = init_process.send_signal(Signal::Kill);
                 self.remove_state_for(&state).ok();
                 cgroup.remove().ok();
                 bail!("generation worker exited without a verified init result");
@@ -403,7 +398,7 @@ impl Runtime {
         ))? {
             return self.wait_for_monitor_cleanup(&state);
         }
-        process.send_signal(Signal::SIGKILL)?;
+        process.send_signal(Signal::Kill)?;
         let _ = process.wait_for_exit(Duration::from_secs(5))?;
         self.wait_for_monitor_cleanup(&state)
     }

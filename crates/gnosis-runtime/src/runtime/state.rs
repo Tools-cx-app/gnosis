@@ -8,6 +8,9 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
+#[cfg(test)]
+use gnosis_helper::parent_pid as current_parent_pid;
+use gnosis_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, effective_uid};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -178,7 +181,7 @@ impl Runtime {
 
     pub(crate) fn ensure_root() -> Result<()> {
         ensure!(
-            nix::unistd::Uid::effective().is_root(),
+            effective_uid() == 0,
             "this operation requires root privileges"
         );
         Ok(())
@@ -274,7 +277,7 @@ impl Runtime {
             .create(true)
             .truncate(false)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
             .open(&self.lock_path)?;
         file.lock_exclusive()
             .context("failed to lock container lifecycle")?;
@@ -288,7 +291,7 @@ impl Runtime {
             .create(true)
             .truncate(false)
             .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
             .open(&self.lock_path)?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(file)),
@@ -366,7 +369,7 @@ fn write_state_atomic(path: &Path, state: &ContainerState) -> Result<()> {
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
         .open(&temporary)?;
     let result = (|| {
         serde_json::to_writer_pretty(&file, state)?;
@@ -497,7 +500,7 @@ mod tests {
     fn parses_namespace_and_parent_pids() {
         let pid = i32::try_from(std::process::id()).unwrap();
         assert!(namespace_pid(pid).unwrap().is_some());
-        assert_eq!(parent_pid(pid).unwrap(), nix::unistd::getppid().as_raw());
+        assert_eq!(parent_pid(pid).unwrap(), current_parent_pid());
     }
 
     #[test]

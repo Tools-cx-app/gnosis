@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Result, ensure};
 use clap::{Parser, Subcommand};
 use gnosis_config::Config;
+use gnosis_helper::{ForkResult, NamespaceFlags, WaitStatus, fork, unshare, waitpid};
 use gnosis_runtime::Runtime;
 
 #[derive(Debug, Parser)]
@@ -102,11 +103,11 @@ fn main() -> Result<()> {
 }
 
 fn check() -> Result<()> {
-    probe_namespace(nix::sched::CloneFlags::CLONE_NEWNS, "mount")?;
-    probe_namespace(nix::sched::CloneFlags::CLONE_NEWPID, "PID")?;
-    probe_namespace(nix::sched::CloneFlags::CLONE_NEWUTS, "UTS")?;
-    probe_namespace(nix::sched::CloneFlags::CLONE_NEWIPC, "IPC")?;
-    probe_namespace(nix::sched::CloneFlags::CLONE_NEWNET, "network")?;
+    probe_namespace(NamespaceFlags::MOUNT, "mount")?;
+    probe_namespace(NamespaceFlags::PID, "PID")?;
+    probe_namespace(NamespaceFlags::UTS, "UTS")?;
+    probe_namespace(NamespaceFlags::IPC, "IPC")?;
+    probe_namespace(NamespaceFlags::NETWORK, "network")?;
     println!(
         "overlayfs: {}",
         std::fs::read_to_string("/proc/filesystems")?.contains("overlay")
@@ -122,16 +123,16 @@ fn check() -> Result<()> {
 }
 
 #[allow(unsafe_code)]
-fn probe_namespace(flag: nix::sched::CloneFlags, name: &str) -> Result<()> {
-    match unsafe { nix::unistd::fork() }? {
-        nix::unistd::ForkResult::Child => {
-            let code = i32::from(nix::sched::unshare(flag).is_err());
+fn probe_namespace(flag: NamespaceFlags, name: &str) -> Result<()> {
+    match unsafe { fork() }? {
+        ForkResult::Child => {
+            let code = i32::from(unshare(flag).is_err());
             std::process::exit(code);
         }
-        nix::unistd::ForkResult::Parent { child } => {
-            let status = nix::sys::wait::waitpid(child, None)?;
+        ForkResult::Parent { child } => {
+            let status = waitpid(child, false)?;
             ensure!(
-                matches!(status, nix::sys::wait::WaitStatus::Exited(_, 0)),
+                matches!(status, WaitStatus::Exited(_, 0)),
                 "{name} namespace probe failed"
             );
             println!("{name} namespace: available");

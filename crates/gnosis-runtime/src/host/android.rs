@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use gnosis_config::AndroidConfig;
-use nix::mount::{MsFlags, mount};
+use gnosis_helper::{MountFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, mount};
 use serde::{Deserialize, Serialize};
 
 const GPU_DIRECTORIES: &[(&str, &str)] = &[
@@ -180,11 +180,11 @@ fn bind_path(source: &Path, target: &Path, recursive: bool) -> Result<()> {
         File::create(target)?;
     }
     let flags = if recursive {
-        MsFlags::MS_BIND | MsFlags::MS_REC
+        MountFlags::BIND | MountFlags::REC
     } else {
-        MsFlags::MS_BIND
+        MountFlags::BIND
     };
-    mount(Some(source), target, None::<&str>, flags, None::<&str>).with_context(|| {
+    mount(Some(source), target, None, flags, None).with_context(|| {
         format!(
             "failed to bind {} to {}",
             source.display(),
@@ -207,7 +207,7 @@ fn selinux_lock(workdir: &Path) -> Result<File> {
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
         .open(workdir.join("selinux.lock"))?;
     file.lock_exclusive()?;
     Ok(file)

@@ -5,10 +5,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use nix::{
-    mount::{MntFlags, MsFlags, mount, umount2},
-    sched::{CloneFlags, unshare},
-    unistd::{chdir, execve, pivot_root},
+use gnosis_helper::{
+    MountFlags, NamespaceFlags, chdir, execve, mount, pivot_root, set_hostname, unmount, unshare,
 };
 use uuid::Uuid;
 
@@ -41,19 +39,24 @@ impl Runtime {
         ensure!(!status.is_empty(), "host network setup did not complete");
         Network::setup_child(&self.config, &status)?;
         if init_system == init::InitSystem::Systemd && host_cgroup_v2 {
-            unshare(CloneFlags::CLONE_NEWCGROUP)
-                .context("failed to create systemd cgroup namespace")?;
+            unshare(NamespaceFlags::CGROUP).context("failed to create systemd cgroup namespace")?;
         }
-        unshare(CloneFlags::CLONE_NEWNS).context("failed to create mount namespace")?;
-        mount::<str, str, str, str>(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE, None)
-            .context("failed to make mount tree private")?;
+        unshare(NamespaceFlags::MOUNT).context("failed to create mount namespace")?;
+        mount(
+            None,
+            Path::new("/"),
+            None,
+            MountFlags::REC | MountFlags::PRIVATE,
+            None,
+        )
+        .context("failed to make mount tree private")?;
         let lower_rootfs = configured_rootfs;
         mount(
             Some(lower_rootfs),
             lower_rootfs,
-            None::<&str>,
-            MsFlags::MS_BIND | MsFlags::MS_REC,
-            None::<&str>,
+            None,
+            MountFlags::BIND | MountFlags::REC,
+            None,
         )
         .context("failed to bind rootfs")?;
         let volatile_root;
@@ -77,11 +80,11 @@ impl Runtime {
             }
             File::create(&target).context("failed to create rootfs/dev/console")?;
             mount(
-                Some(console.slave_path.as_str()),
+                Some(Path::new(&console.slave_path)),
                 &target,
-                None::<&str>,
-                MsFlags::MS_BIND,
-                None::<&str>,
+                None,
+                MountFlags::BIND,
+                None,
             )
             .context("failed to bind foreground PTY to rootfs/dev/console")?;
         }
@@ -90,82 +93,82 @@ impl Runtime {
         chdir("/").context("failed to enter new root")?;
 
         mount(
+            Some(Path::new("proc")),
+            Path::new("/proc"),
             Some("proc"),
-            "/proc",
-            Some("proc"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
-            None::<&str>,
+            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+            None,
         )
         .context("failed to mount proc")?;
         mount(
+            Some(Path::new("sysfs")),
+            Path::new("/sys"),
             Some("sysfs"),
-            "/sys",
-            Some("sysfs"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
-            None::<&str>,
+            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+            None,
         )
         .context("failed to mount sysfs")?;
         if init_system == init::InitSystem::Systemd {
             fs::create_dir_all("/sys/fs/cgroup")?;
             mount(
-                Some("none"),
-                "/sys/fs/cgroup",
+                Some(Path::new("none")),
+                Path::new("/sys/fs/cgroup"),
                 Some("tmpfs"),
-                MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+                MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
                 Some("mode=755,size=16M"),
             )
             .context("failed to mount systemd cgroup tmpfs base")?;
             if host_cgroup_v2 {
                 mount(
+                    Some(Path::new("cgroup2")),
+                    Path::new("/sys/fs/cgroup"),
                     Some("cgroup2"),
-                    "/sys/fs/cgroup",
-                    Some("cgroup2"),
-                    MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
-                    None::<&str>,
+                    MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+                    None,
                 )
                 .context("failed to mount systemd cgroup2 hierarchy")?;
             } else {
                 fs::create_dir_all("/sys/fs/cgroup/systemd")?;
                 mount(
+                    Some(Path::new("cgroup")),
+                    Path::new("/sys/fs/cgroup/systemd"),
                     Some("cgroup"),
-                    "/sys/fs/cgroup/systemd",
-                    Some("cgroup"),
-                    MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+                    MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
                     Some("none,name=systemd"),
                 )
                 .context("failed to mount legacy systemd cgroup hierarchy")?;
             }
         }
         mount(
+            Some(Path::new("tmpfs")),
+            Path::new("/run"),
             Some("tmpfs"),
-            "/run",
-            Some("tmpfs"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+            MountFlags::NOSUID | MountFlags::NODEV,
             Some("mode=755"),
         )
         .context("failed to mount /run")?;
         mount(
+            Some(Path::new("tmpfs")),
+            Path::new("/tmp"),
             Some("tmpfs"),
-            "/tmp",
-            Some("tmpfs"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+            MountFlags::NOSUID | MountFlags::NODEV,
             Some("mode=1777"),
         )
         .context("failed to mount /tmp")?;
         mount(
+            Some(Path::new("tmpfs")),
+            Path::new("/dev"),
             Some("tmpfs"),
-            "/dev",
-            Some("tmpfs"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC,
+            MountFlags::NOSUID | MountFlags::NOEXEC,
             Some("mode=755"),
         )
         .context("failed to mount /dev")?;
         fs::create_dir_all("/dev/pts")?;
         mount(
+            Some(Path::new("devpts")),
+            Path::new("/dev/pts"),
             Some("devpts"),
-            "/dev/pts",
-            Some("devpts"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC,
+            MountFlags::NOSUID | MountFlags::NOEXEC,
             Some("newinstance,ptmxmode=0666,mode=0620,gid=5"),
         )
         .context("failed to mount private devpts")?;
@@ -174,14 +177,8 @@ impl Runtime {
             let target = PathBuf::from("/dev").join(device);
             File::create(&target)
                 .with_context(|| format!("failed to create {}", target.display()))?;
-            mount(
-                Some(&old),
-                &target,
-                None::<&str>,
-                MsFlags::MS_BIND,
-                None::<&str>,
-            )
-            .with_context(|| format!("failed to bind {}", target.display()))?;
+            mount(Some(&old), &target, None, MountFlags::BIND, None)
+                .with_context(|| format!("failed to bind {}", target.display()))?;
         }
         std::os::unix::fs::symlink("pts/ptmx", "/dev/ptmx")?;
         std::os::unix::fs::symlink("/proc/self/fd", "/dev/fd")?;
@@ -191,7 +188,7 @@ impl Runtime {
         #[cfg(target_os = "android")]
         android::setup_after_pivot(&self.config.container.android)?;
         self.mount_binds_inside()?;
-        umount2("/.old_root", MntFlags::MNT_DETACH).context("failed to detach old root")?;
+        unmount(Path::new("/.old_root"), true).context("failed to detach old root")?;
         fs::remove_dir("/.old_root").ok();
         Network::write_dns(&self.config, Path::new("/"))?;
         set_container_hostname(&self.config.container.hostname)?;
@@ -258,16 +255,16 @@ impl Runtime {
             mount(
                 Some(&source),
                 &target,
-                None::<&str>,
-                MsFlags::MS_BIND | MsFlags::MS_REC,
-                None::<&str>,
+                None,
+                MountFlags::BIND | MountFlags::REC,
+                None,
             )?;
             if bind.read_only {
-                mount::<Path, Path, str, str>(
+                mount(
                     None,
                     &target,
                     None,
-                    MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+                    MountFlags::BIND | MountFlags::REMOUNT | MountFlags::RDONLY,
                     None,
                 )?;
             }
@@ -279,10 +276,10 @@ impl Runtime {
         let base = self.volatile_dir.join(&self.config.container.name);
         fs::create_dir_all(&base)?;
         mount(
-            Some("tmpfs"),
+            Some(Path::new("tmpfs")),
             &base,
             Some("tmpfs"),
-            MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+            MountFlags::NOSUID | MountFlags::NODEV,
             Some("mode=700"),
         )
         .context("failed to mount volatile tmpfs")?;
@@ -299,10 +296,10 @@ impl Runtime {
             work.display()
         );
         mount(
-            Some("overlay"),
+            Some(Path::new("overlay")),
             &merged,
             Some("overlay"),
-            MsFlags::empty(),
+            MountFlags::EMPTY,
             Some(options.as_str()),
         )
         .context("failed to mount volatile overlay")?;
@@ -314,26 +311,8 @@ fn strip_root(path: &Path) -> &Path {
     path.strip_prefix("/").unwrap_or(path)
 }
 
-#[cfg(not(target_os = "android"))]
 fn set_container_hostname(hostname: &str) -> Result<()> {
-    nix::unistd::sethostname(hostname).context("failed to set hostname")
-}
-
-#[cfg(target_os = "android")]
-#[allow(unsafe_code)]
-fn set_container_hostname(hostname: &str) -> Result<()> {
-    let hostname = std::ffi::CString::new(hostname)?;
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_sethostname,
-            hostname.as_ptr(),
-            hostname.as_bytes().len(),
-        )
-    };
-    if result < 0 {
-        return Err(std::io::Error::last_os_error()).context("failed to set hostname");
-    }
-    Ok(())
+    set_hostname(hostname).context("failed to set hostname")
 }
 
 fn ensure_no_symlink_components(rootfs: &Path, target: &Path) -> Result<()> {

@@ -8,8 +8,8 @@ license.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 gnosis-config = { path = "../gnosis-config" }
+gnosis-helper.workspace = true
 gnosis-runtime = { path = "../gnosis-runtime" }
-nix.workspace = true
 
 [lints]
 workspace = true

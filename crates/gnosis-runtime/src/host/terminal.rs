@@ -1,48 +1,24 @@
 use std::{
-    io::{self, IoSlice, IoSliceMut, Write},
-    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    io::Write,
+    os::fd::{AsFd, AsRawFd, OwnedFd},
     sync::atomic::{AtomicI32, Ordering},
 };
 
 use anyhow::{Context, Result, bail};
-#[cfg(not(target_os = "android"))]
-use nix::pty::openpty;
-use nix::{
-    errno::Errno,
-    poll::{PollFd, PollFlags, PollTimeout, poll},
-    pty::{OpenptyResult, Winsize},
-    sys::{
-        socket::{
-            AddressFamily, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag, SockType,
-            recvmsg, sendmsg, socketpair,
-        },
-        stat::{Mode, fchmod},
-        termios::{SetArg, Termios, cfmakeraw, tcgetattr, tcsetattr},
-        wait::{WaitPidFlag, WaitStatus, waitpid},
-    },
-    unistd::{
-        ForkResult, Gid, Pid, Uid, dup2_stderr, dup2_stdin, dup2_stdout, fork, read, setgid,
-        setgroups, setsid, setuid, write,
-    },
+use gnosis_helper::{
+    ForkResult, POLL_HANGUP, POLL_IN, PollFd, PtyPair, Signal, SignalHandler, TerminalSettings,
+    WaitStatus, WindowSize, dup_stdio, effective_uid, fork, is_interrupted, is_io_error,
+    is_terminal, is_would_block, make_raw, open_pty, poll, pty_number, read, receive_fds, send_fds,
+    set_controlling_terminal, set_file_mode, set_gid, set_groups, set_signal_handler,
+    set_terminal_settings, set_terminal_size, set_uid, setsid, socket_pair, terminal_settings,
+    terminal_size, waitpid, write,
 };
 
 use super::process::ProcessHandle;
 use crate::container::init::{self, InitSystem};
 
 static FORWARDED_SIGNAL: AtomicI32 = AtomicI32::new(0);
-const PTY_MODE: Mode = Mode::from_bits_truncate(0o620);
-
-#[cfg(target_os = "android")]
-const TIOCGPTN_IOCTL: libc::Ioctl = libc::_IOR::<libc::c_int>('T' as libc::c_uint, 0x30);
-
-#[cfg(not(target_os = "android"))]
-const TIOCGPTN_IOCTL: libc::Ioctl = libc::TIOCGPTN;
-
-#[cfg(target_os = "android")]
-const TIOCSPTLCK_IOCTL: libc::Ioctl = libc::_IOW::<libc::c_int>('T' as libc::c_uint, 0x31);
-
-#[cfg(target_os = "android")]
-const TIOCGPTPEER_IOCTL: libc::Ioctl = libc::_IO('T' as libc::c_uint, 0x41);
+const PTY_MODE: u32 = 0o620;
 
 pub(crate) struct Console {
     pub(crate) master: OwnedFd,
@@ -52,13 +28,13 @@ pub(crate) struct Console {
 impl Console {
     pub(crate) fn open() -> Result<Self> {
         let winsize = terminal_size(std::io::stdin().as_fd()).ok();
-        let OpenptyResult { master, slave } = if Uid::effective().is_root() {
+        let PtyPair { master, slave } = if effective_uid() == 0 {
             open_console_pty_unprivileged(winsize.as_ref())?
         } else {
             open_console_pty(winsize.as_ref())?
         };
         // Keep the broker-owned UID on the host PTY, but pin the expected tty mode.
-        let _ = fchmod(&slave, PTY_MODE);
+        let _ = set_file_mode(slave.as_fd(), PTY_MODE);
         Ok(Self {
             slave_path: tty_path(&master)?,
             master,
@@ -79,24 +55,14 @@ fn open_pty_slave(path: &str) -> Result<OwnedFd> {
         .map(Into::into)
 }
 
-#[allow(unsafe_code)]
 fn tty_path(master: &OwnedFd) -> Result<String> {
-    let mut number = 0_u32;
-    if unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTN_IOCTL, &mut number) } < 0 {
-        return Err(io::Error::last_os_error()).context("failed to resolve PTY slave path");
-    }
+    let number = pty_number(master.as_fd()).context("failed to resolve PTY slave path")?;
     Ok(format!("/dev/pts/{number}"))
 }
 
 #[allow(unsafe_code)]
-fn open_console_pty_unprivileged(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
-    let (parent, child) = socketpair(
-        AddressFamily::Unix,
-        SockType::Stream,
-        None,
-        SockFlag::SOCK_CLOEXEC,
-    )
-    .context("failed to create PTY broker channel")?;
+fn open_console_pty_unprivileged(winsize: Option<&WindowSize>) -> Result<PtyPair> {
+    let (parent, child) = socket_pair().context("failed to create PTY broker channel")?;
     // SAFETY: this runtime is single-threaded at PTY allocation. The child only
     // drops credentials, allocates descriptors, sends them, and exits.
     match unsafe { fork() }.context("failed to fork PTY broker")? {
@@ -118,7 +84,7 @@ fn open_console_pty_unprivileged(winsize: Option<&Winsize>) -> Result<OpenptyRes
             drop(child);
             let received = receive_pty(&parent);
             drop(parent);
-            let status = waitpid(broker, None).context("failed waiting for PTY broker")?;
+            let status = waitpid(broker, false).context("failed waiting for PTY broker")?;
             ensure_broker_success(status)?;
             received
         }
@@ -127,9 +93,9 @@ fn open_console_pty_unprivileged(winsize: Option<&Winsize>) -> Result<OpenptyRes
 
 fn drop_pty_broker_privileges() -> Result<()> {
     let id = pty_broker_id();
-    setgroups(&[]).context("failed to clear PTY broker supplementary groups")?;
-    setgid(Gid::from_raw(id)).context("failed to drop PTY broker GID")?;
-    setuid(Uid::from_raw(id)).context("failed to drop PTY broker UID")?;
+    set_groups(&[]).context("failed to clear PTY broker supplementary groups")?;
+    set_gid(id).context("failed to drop PTY broker GID")?;
+    set_uid(id).context("failed to drop PTY broker UID")?;
     Ok(())
 }
 
@@ -143,44 +109,19 @@ const fn pty_broker_id() -> u32 {
     65_534
 }
 
-fn send_pty(socket: &OwnedFd, pty: &OpenptyResult) -> Result<()> {
-    let payload = [IoSlice::new(b"P")];
+fn send_pty(socket: &OwnedFd, pty: &PtyPair) -> Result<()> {
     let descriptors = [pty.master.as_raw_fd(), pty.slave.as_raw_fd()];
-    let control = [ControlMessage::ScmRights(&descriptors)];
-    sendmsg::<()>(
-        socket.as_raw_fd(),
-        &payload,
-        &control,
-        MsgFlags::empty(),
-        None,
-    )
-    .context("failed to send PTY descriptors")?;
+    send_fds(socket.as_fd(), &descriptors).context("failed to send PTY descriptors")?;
     Ok(())
 }
 
-#[allow(unsafe_code)]
-fn receive_pty(socket: &OwnedFd) -> Result<OpenptyResult> {
-    let mut payload = [0_u8; 1];
-    let mut vectors = [IoSliceMut::new(&mut payload)];
-    let mut control = nix::cmsg_space!([std::os::fd::RawFd; 2]);
-    let message = recvmsg::<()>(
-        socket.as_raw_fd(),
-        &mut vectors,
-        Some(&mut control),
-        MsgFlags::empty(),
-    )
-    .context("failed to receive PTY descriptors")?;
-    let descriptors = message
-        .cmsgs()?
-        .find_map(|message| match message {
-            ControlMessageOwned::ScmRights(fds) if fds.len() == 2 => Some(fds),
-            _ => None,
-        })
-        .context("PTY broker exited without providing two descriptors")?;
-    // SAFETY: SCM_RIGHTS created two new descriptors owned by this process.
-    Ok(OpenptyResult {
-        master: unsafe { OwnedFd::from_raw_fd(descriptors[0]) },
-        slave: unsafe { OwnedFd::from_raw_fd(descriptors[1]) },
+fn receive_pty(socket: &OwnedFd) -> Result<PtyPair> {
+    let mut descriptors = receive_fds(socket.as_fd(), 2)
+        .context("PTY broker exited without providing two descriptors")?
+        .into_iter();
+    Ok(PtyPair {
+        master: descriptors.next().expect("helper returned two descriptors"),
+        slave: descriptors.next().expect("helper returned two descriptors"),
     })
 }
 
@@ -193,129 +134,40 @@ fn ensure_broker_success(status: WaitStatus) -> Result<()> {
     }
 }
 
-#[cfg(not(target_os = "android"))]
-fn open_console_pty(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
-    openpty(winsize, None).context("failed to allocate foreground console PTY")
+fn open_console_pty(winsize: Option<&WindowSize>) -> Result<PtyPair> {
+    open_pty(winsize).context("failed to allocate foreground console PTY")
 }
 
-#[cfg(target_os = "android")]
-#[allow(unsafe_code)]
-fn open_console_pty(winsize: Option<&Winsize>) -> Result<OpenptyResult> {
-    use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt};
-
-    let flags = libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC;
-    let master = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC)
-        .open("/dev/ptmx")
-        .context("failed to open Android PTY master")?;
-    let unlock = 0;
-    let _ = unsafe { libc::ioctl(master.as_raw_fd(), TIOCSPTLCK_IOCTL, &unlock) };
-
-    let peer = unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTPEER_IOCTL, flags) };
-    let slave: OwnedFd = if peer >= 0 {
-        // SAFETY: TIOCGPTPEER returned a new descriptor owned by this process.
-        unsafe { OwnedFd::from_raw_fd(peer) }
-    } else {
-        let mut number = 0_u32;
-        if unsafe { libc::ioctl(master.as_raw_fd(), TIOCGPTN_IOCTL, &mut number) } < 0 {
-            return Err(io::Error::last_os_error()).context("failed to resolve Android PTY number");
-        }
-        let path = format!("/dev/pts/{number}");
-        open_pty_slave_android(&path)?
-    };
-    if let Some(winsize) = winsize {
-        let result = unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ, winsize) };
-        if result < 0 {
-            return Err(io::Error::last_os_error()).context("failed to set Android PTY size");
-        }
-    }
-    Ok(OpenptyResult {
-        master: master.into(),
-        slave,
-    })
-}
-
-#[cfg(target_os = "android")]
-fn open_pty_slave_android(path: &str) -> Result<OwnedFd> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOCTTY | libc::O_CLOEXEC)
-        .open(path)
-        .with_context(|| format!("failed to open Android PTY slave {path}"))
-        .map(Into::into)
-}
-
-#[allow(unsafe_code)]
 pub(crate) fn configure_child(slave: &OwnedFd) -> Result<()> {
     setsid().context("failed to create terminal session")?;
-    // SAFETY: TIOCSCTTY only associates this open PTY slave with the new session.
-    let result = unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSCTTY, 0) };
-    if result == -1 {
-        return Err(io::Error::last_os_error()).context("failed to set controlling terminal");
-    }
-    dup2_stdin(slave).context("failed to connect console stdin")?;
-    dup2_stdout(slave).context("failed to connect console stdout")?;
-    dup2_stderr(slave).context("failed to connect console stderr")?;
+    set_controlling_terminal(slave.as_fd()).context("failed to set controlling terminal")?;
+    dup_stdio(slave).context("failed to connect console stdio")?;
     Ok(())
 }
 
-#[allow(unsafe_code)]
 pub(crate) fn ignore_hangup() -> Result<()> {
-    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-
-    let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-    // SAFETY: action contains SIG_IGN and an initialized empty signal mask.
-    unsafe { sigaction(Signal::SIGHUP, &action) }.context("failed to ignore interactive SIGHUP")?;
+    set_signal_handler(Signal::Hangup, SignalHandler::Ignore, false)
+        .context("failed to ignore interactive SIGHUP")?;
     Ok(())
 }
 
 pub(crate) fn send_fd(socket: &OwnedFd, fd: &OwnedFd) -> Result<()> {
-    let payload = [IoSlice::new(b"P")];
     let descriptors = [fd.as_raw_fd()];
-    let control = [ControlMessage::ScmRights(&descriptors)];
-    sendmsg::<()>(
-        socket.as_raw_fd(),
-        &payload,
-        &control,
-        MsgFlags::empty(),
-        None,
-    )
-    .context("failed to send interactive PTY")?;
+    send_fds(socket.as_fd(), &descriptors).context("failed to send interactive PTY")?;
     Ok(())
 }
 
-#[allow(unsafe_code)]
 pub(crate) fn receive_fd(socket: &OwnedFd) -> Result<OwnedFd> {
-    let mut payload = [0_u8; 1];
-    let mut vectors = [IoSliceMut::new(&mut payload)];
-    let mut control = nix::cmsg_space!([std::os::fd::RawFd; 1]);
-    let message = recvmsg::<()>(
-        socket.as_raw_fd(),
-        &mut vectors,
-        Some(&mut control),
-        MsgFlags::empty(),
-    )
-    .context("failed to receive interactive PTY")?;
-    let raw_fd = message
-        .cmsgs()?
-        .find_map(|message| match message {
-            ControlMessageOwned::ScmRights(fds) => fds.into_iter().next(),
-            _ => None,
-        })
-        .context("namespace worker exited before providing an interactive PTY")?;
-    // SAFETY: SCM_RIGHTS returned a new descriptor owned by this process.
-    Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+    receive_fds(socket.as_fd(), 1)
+        .context("namespace worker exited before providing an interactive PTY")?
+        .into_iter()
+        .next()
+        .context("helper returned no interactive PTY descriptor")
 }
 
-#[allow(unsafe_code)]
 pub(crate) fn proxy(
     master: &OwnedFd,
-    child: Pid,
+    child: i32,
     shutdown_target: Option<(&ProcessHandle, InitSystem)>,
 ) -> Result<WaitStatus> {
     let stdin = std::io::stdin();
@@ -340,26 +192,26 @@ pub(crate) fn proxy(
         }
         let mut read_output = false;
         sync_terminal_size(stdin.as_fd(), master.as_fd())?;
-        let stdin_events = if stdin_open {
-            PollFlags::POLLIN
-        } else {
-            PollFlags::empty()
-        };
+        let stdin_events = if stdin_open { POLL_IN } else { 0 };
         let mut fds = [
-            PollFd::new(master.as_fd(), PollFlags::POLLIN),
+            PollFd::new(master.as_fd(), POLL_IN),
             PollFd::new(stdin.as_fd(), stdin_events),
         ];
-        match poll(&mut fds, PollTimeout::from(100_u16)) {
-            Ok(_) | Err(Errno::EINTR) => {}
-            Err(error) => return Err(error).context("failed to poll terminal proxy"),
+        if let Err(error) = poll(&mut fds, 100)
+            && !is_interrupted(&error)
+        {
+            return Err(error).context("failed to poll terminal proxy");
         }
 
-        if fds[0]
-            .revents()
-            .is_some_and(|events| events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP))
-        {
+        if fds[0].revents() & (POLL_IN | POLL_HANGUP) != 0 {
             match read(master, &mut buffer) {
-                Ok(0) | Err(Errno::EIO) => {
+                Ok(0) => {
+                    if let Some(status) = child_status {
+                        stdout.flush()?;
+                        return Ok(status);
+                    }
+                }
+                Err(error) if is_io_error(&error) => {
                     if let Some(status) = child_status {
                         stdout.flush()?;
                         return Ok(status);
@@ -370,15 +222,11 @@ pub(crate) fn proxy(
                     stdout.write_all(&buffer[..length])?;
                     stdout.flush()?;
                 }
-                Err(Errno::EINTR | Errno::EAGAIN) => {}
+                Err(error) if is_interrupted(&error) || is_would_block(&error) => {}
                 Err(error) => return Err(error).context("failed to read PTY output"),
             }
         }
-        if stdin_open
-            && fds[1]
-                .revents()
-                .is_some_and(|events| events.intersects(PollFlags::POLLIN | PollFlags::POLLHUP))
-        {
+        if stdin_open && fds[1].revents() & (POLL_IN | POLL_HANGUP) != 0 {
             match read(&stdin, &mut buffer) {
                 Ok(0) => stdin_open = false,
                 Ok(length) => {
@@ -395,12 +243,12 @@ pub(crate) fn proxy(
                         write_all(master, input)?;
                     }
                 }
-                Err(Errno::EINTR | Errno::EAGAIN) => {}
+                Err(error) if is_interrupted(&error) || is_would_block(&error) => {}
                 Err(error) => return Err(error).context("failed to read terminal input"),
             }
         }
         if child_status.is_none() {
-            match waitpid(child, Some(WaitPidFlag::WNOHANG))? {
+            match waitpid(child, true)? {
                 WaitStatus::StillAlive => {}
                 status => child_status = Some(status),
             }
@@ -424,7 +272,7 @@ fn write_all(fd: &OwnedFd, mut bytes: &[u8]) -> Result<()> {
         match write(fd, bytes) {
             Ok(0) => bail!("PTY stopped accepting input"),
             Ok(length) => bytes = &bytes[length..],
-            Err(Errno::EINTR) => {}
+            Err(error) if is_interrupted(&error) => {}
             Err(error) => return Err(error).context("failed to write PTY input"),
         }
     }
@@ -432,18 +280,18 @@ fn write_all(fd: &OwnedFd, mut bytes: &[u8]) -> Result<()> {
 }
 
 struct RawTerminal {
-    original: Option<Termios>,
+    original: Option<TerminalSettings>,
 }
 
 impl RawTerminal {
     fn enable(fd: std::os::fd::BorrowedFd<'_>) -> Result<Self> {
-        if !nix::unistd::isatty(fd)? {
+        if !is_terminal(fd)? {
             return Ok(Self { original: None });
         }
-        let original = tcgetattr(fd)?;
+        let original = terminal_settings(fd)?;
         let mut raw = original.clone();
-        cfmakeraw(&mut raw);
-        tcsetattr(fd, SetArg::TCSANOW, &raw)?;
+        make_raw(&mut raw);
+        set_terminal_settings(fd, &raw)?;
         Ok(Self {
             original: Some(original),
         })
@@ -453,7 +301,7 @@ impl RawTerminal {
 impl Drop for RawTerminal {
     fn drop(&mut self) {
         if let Some(original) = &self.original {
-            let _ = tcsetattr(std::io::stdin(), SetArg::TCSANOW, original);
+            let _ = set_terminal_settings(std::io::stdin().as_fd(), original);
         }
     }
 }
@@ -461,22 +309,13 @@ impl Drop for RawTerminal {
 struct ForwardSignals;
 
 impl ForwardSignals {
-    #[allow(unsafe_code)]
     fn install() -> Result<Self> {
-        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-
-        extern "C" fn record(signal: libc::c_int) {
+        extern "C" fn record(signal: i32) {
             FORWARDED_SIGNAL.store(signal, Ordering::Relaxed);
         }
 
-        let action = SigAction::new(
-            SigHandler::Handler(record),
-            SaFlags::SA_RESTART,
-            SigSet::empty(),
-        );
-        for signal in [Signal::SIGINT, Signal::SIGTERM] {
-            // SAFETY: record only stores an integer in a lock-free atomic.
-            unsafe { sigaction(signal, &action) }
+        for signal in [Signal::Interrupt, Signal::Terminate] {
+            set_signal_handler(signal, SignalHandler::Handler(record), true)
                 .with_context(|| format!("failed to capture foreground signal {signal}"))?;
         }
         Ok(Self)
@@ -484,48 +323,22 @@ impl ForwardSignals {
 }
 
 impl Drop for ForwardSignals {
-    #[allow(unsafe_code)]
     fn drop(&mut self) {
-        use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-
-        let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-        for signal in [Signal::SIGINT, Signal::SIGTERM] {
-            // SAFETY: action contains SIG_IGN and an initialized empty signal mask.
-            let _ = unsafe { sigaction(signal, &action) };
+        for signal in [Signal::Interrupt, Signal::Terminate] {
+            let _ = set_signal_handler(signal, SignalHandler::Ignore, false);
         }
     }
 }
 
-#[allow(unsafe_code)]
 fn sync_terminal_size(
     source: std::os::fd::BorrowedFd<'_>,
     target: std::os::fd::BorrowedFd<'_>,
 ) -> Result<()> {
-    if nix::unistd::isatty(source)? {
+    if is_terminal(source)? {
         let size = terminal_size(source)?;
-        // SAFETY: target is an open PTY master and size points to a valid winsize value.
-        let result = unsafe { libc::ioctl(target.as_raw_fd(), libc::TIOCSWINSZ, &size) };
-        if result == -1 {
-            return Err(io::Error::last_os_error()).context("failed to resize PTY");
-        }
+        set_terminal_size(target, &size).context("failed to resize PTY")?;
     }
     Ok(())
-}
-
-#[allow(unsafe_code)]
-fn terminal_size(fd: std::os::fd::BorrowedFd<'_>) -> Result<Winsize> {
-    let mut size = Winsize {
-        ws_row: 0,
-        ws_col: 0,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    // SAFETY: fd is borrowed for this call and size is valid writable storage.
-    let result = unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut size) };
-    if result == -1 {
-        return Err(io::Error::last_os_error()).context("failed to read terminal size");
-    }
-    Ok(size)
 }
 
 #[cfg(test)]
@@ -548,24 +361,16 @@ mod tests {
     fn allocates_terminal_pair() {
         let console = Console::open().expect("PTY allocation should work");
         let slave = console.open_slave().expect("PTY slave should reopen");
-        assert!(nix::unistd::isatty(&console.master).unwrap());
-        assert!(nix::unistd::isatty(&slave).unwrap());
+        assert!(is_terminal(console.master.as_fd()).unwrap());
+        assert!(is_terminal(slave.as_fd()).unwrap());
     }
 
     #[test]
     fn transfers_terminal_descriptor() {
-        use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
-
-        let (sender, receiver) = socketpair(
-            AddressFamily::Unix,
-            SockType::Stream,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
+        let (sender, receiver) = socket_pair().unwrap();
         let console = Console::open().unwrap();
         send_fd(&sender, &console.master).unwrap();
         let transferred = receive_fd(&receiver).unwrap();
-        assert!(nix::unistd::isatty(transferred).unwrap());
+        assert!(is_terminal(transferred.as_fd()).unwrap());
     }
 }

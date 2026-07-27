@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use gnosis_config::{Config, NetworkMode, Protocol};
-use nix::sched::{CloneFlags, setns};
+use gnosis_helper::{NamespaceFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, setns};
 use serde::{Deserialize, Serialize};
 
 pub struct Network {
@@ -27,7 +27,7 @@ impl Network {
         if config.container.network == NetworkMode::Host {
             return Ok(network);
         }
-        setns(host_netns.as_fd(), CloneFlags::CLONE_NEWNET)
+        setns(host_netns.as_fd(), NamespaceFlags::NETWORK)
             .context("failed to return to host network namespace")?;
         if config.container.network == NetworkMode::None {
             return Ok(network);
@@ -283,7 +283,7 @@ fn network_lock(workdir: &Path) -> Result<File> {
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
         .open(workdir.join("network.lock"))?;
     file.lock_exclusive()?;
     Ok(file)

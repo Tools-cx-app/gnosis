@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use gnosis_config::ResourceConfig;
-use nix::sys::statfs::{TMPFS_MAGIC, statfs};
+use gnosis_helper::{MountFlags, TMPFS_MAGIC, filesystem_type, mount, unmount};
 
 pub struct Cgroup {
     path: Option<PathBuf>,
@@ -101,34 +101,30 @@ fn ensure_cgroup2_root(bootstrap: bool) -> Result<Option<PathBuf>> {
 
     let root = PathBuf::from("/sys/fs/cgroup");
     fs::create_dir_all(&root)?;
-    let stat = statfs(&root)?;
+    let filesystem = filesystem_type(&root)?;
     let mut mounted_tmpfs = false;
-    if stat.filesystem_type() != TMPFS_MAGIC {
-        nix::mount::mount(
-            Some("none"),
+    if filesystem != TMPFS_MAGIC {
+        mount(
+            Some(Path::new("none")),
             &root,
             Some("tmpfs"),
-            nix::mount::MsFlags::MS_NOSUID
-                | nix::mount::MsFlags::MS_NODEV
-                | nix::mount::MsFlags::MS_NOEXEC,
+            MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
             Some("mode=755,size=16M"),
         )
         .context("failed to mount cgroup tmpfs base")?;
         mounted_tmpfs = true;
     }
-    if nix::mount::mount(
-        Some("none"),
+    if mount(
+        Some(Path::new("none")),
         &root,
         Some("cgroup2"),
-        nix::mount::MsFlags::MS_NOSUID
-            | nix::mount::MsFlags::MS_NODEV
-            | nix::mount::MsFlags::MS_NOEXEC,
-        None::<&str>,
+        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        None,
     )
     .is_err()
     {
         if mounted_tmpfs {
-            let _ = nix::mount::umount(&root);
+            let _ = unmount(&root, false);
         }
         return Ok(None);
     }

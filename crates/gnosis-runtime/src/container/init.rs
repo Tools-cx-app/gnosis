@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Result;
 use gnosis_config::Config;
-use nix::sys::signal::Signal;
+use gnosis_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, OPEN_NONBLOCK, Signal, realtime_min};
 use serde::{Deserialize, Serialize};
 
 use crate::host::process::ProcessHandle;
@@ -145,15 +145,15 @@ pub(crate) fn detect(rootfs: &Path, configured_init: &Path) -> InitSystem {
 
 pub(crate) fn request_shutdown(process: &ProcessHandle, system: InitSystem) -> Result<()> {
     match system {
-        InitSystem::Systemd => process.send_signal_raw(libc::SIGRTMIN() + 3),
+        InitSystem::Systemd => process.send_signal_raw(realtime_min() + 3),
         InitSystem::Procd | InitSystem::S6 | InitSystem::Busybox => {
-            process.send_signal(Signal::SIGUSR2)
+            process.send_signal(Signal::User2)
         }
-        InitSystem::Runit => process.send_signal(Signal::SIGCONT),
-        InitSystem::Openrc => process.send_signal(Signal::SIGPWR),
+        InitSystem::Runit => process.send_signal(Signal::Continue),
+        InitSystem::Openrc => process.send_signal(Signal::Power),
         InitSystem::Sysvinit => request_sysv_shutdown(process),
-        InitSystem::Custom => process.send_signal(Signal::SIGKILL),
-        InitSystem::Unknown => process.send_signal(Signal::SIGTERM),
+        InitSystem::Custom => process.send_signal(Signal::Kill),
+        InitSystem::Unknown => process.send_signal(Signal::Terminate),
     }
 }
 
@@ -176,14 +176,14 @@ fn request_sysv_shutdown(process: &ProcessHandle) -> Result<()> {
         let target = PathBuf::from(format!("/proc/{}/root/{path}", process.pid().as_raw()));
         if let Ok(mut file) = OpenOptions::new()
             .write(true)
-            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .custom_flags(OPEN_NONBLOCK | OPEN_CLOEXEC | OPEN_NOFOLLOW)
             .open(&target)
             && file.write_all(&request).is_ok()
         {
             return Ok(());
         }
     }
-    process.send_signal(Signal::SIGPWR)
+    process.send_signal(Signal::Power)
 }
 
 fn init_request() -> [u8; 384] {

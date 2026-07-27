@@ -2,7 +2,18 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gnosis_config::SecurityConfig;
-use nix::mount::{MsFlags, mount};
+use gnosis_helper::{
+    ADDRESS_FAMILY_ALG, FilterInstruction, MountFlags, SECCOMP_ALLOW, SECCOMP_ERRNO_PERMISSION,
+    SECCOMP_KILL_PROCESS, blocked_syscalls, install_seccomp as install_seccomp_filter, mount,
+    namespace_user_flag, syscall_clone, syscall_socket, syscall_unshare,
+};
+
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64"
+))]
+use gnosis_helper::{SECCOMP_ERRNO_NOT_IMPLEMENTED, syscall_clone3};
 
 const BPF_LD_W_ABS: u16 = 0x20;
 const BPF_JMP_JEQ_K: u16 = 0x15;
@@ -14,28 +25,28 @@ const SECCOMP_DATA_ARG0_OFFSET: u32 = 16;
 
 pub fn harden_mounts(config: &SecurityConfig) -> Result<()> {
     if config.read_only_sys {
-        mount::<str, str, str, str>(
+        mount(
             None,
-            "/sys",
+            Path::new("/sys"),
             None,
-            MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+            MountFlags::BIND | MountFlags::REMOUNT | MountFlags::RDONLY,
             None,
         )
         .context("failed to make /sys read-only")?;
     }
     mount(
-        Some("/proc/sys"),
-        "/proc/sys",
-        None::<&str>,
-        MsFlags::MS_BIND,
-        None::<&str>,
+        Some(Path::new("/proc/sys")),
+        Path::new("/proc/sys"),
+        None,
+        MountFlags::BIND,
+        None,
     )
     .context("failed to bind /proc/sys for hardening")?;
-    mount::<str, str, str, str>(
+    mount(
         None,
-        "/proc/sys",
+        Path::new("/proc/sys"),
         None,
-        MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+        MountFlags::BIND | MountFlags::REMOUNT | MountFlags::RDONLY,
         None,
     )
     .context("failed to make /proc/sys read-only")?;
@@ -53,27 +64,27 @@ pub fn harden_mounts(config: &SecurityConfig) -> Result<()> {
         }
         if target.is_dir() {
             mount(
+                Some(Path::new("tmpfs")),
+                target,
                 Some("tmpfs"),
-                path,
-                Some("tmpfs"),
-                MsFlags::MS_RDONLY | MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC,
+                MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
                 Some("size=4k"),
             )
             .with_context(|| format!("failed to mask {path}"))?;
         } else {
             mount(
-                Some("/dev/null"),
-                path,
-                None::<&str>,
-                MsFlags::MS_BIND,
-                None::<&str>,
+                Some(Path::new("/dev/null")),
+                target,
+                None,
+                MountFlags::BIND,
+                None,
             )
             .with_context(|| format!("failed to mask {path}"))?;
-            mount::<str, str, str, str>(
+            mount(
                 None,
-                path,
+                target,
                 None,
-                MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
+                MountFlags::BIND | MountFlags::REMOUNT | MountFlags::RDONLY,
                 None,
             )
             .with_context(|| format!("failed to make mask read-only for {path}"))?;
@@ -82,7 +93,6 @@ pub fn harden_mounts(config: &SecurityConfig) -> Result<()> {
     Ok(())
 }
 
-#[allow(unsafe_code)]
 #[allow(clippy::too_many_lines)]
 pub fn install_seccomp(config: &SecurityConfig) -> Result<()> {
     let blocked = blocked_syscalls();
@@ -90,13 +100,13 @@ pub fn install_seccomp(config: &SecurityConfig) -> Result<()> {
     let mut instructions = vec![
         statement(BPF_LD_W_ABS, SECCOMP_DATA_ARCH_OFFSET),
         jump(BPF_JMP_JEQ_K, audit_arch(), 1, 0),
-        statement(BPF_RET_K, libc::SECCOMP_RET_KILL_PROCESS),
+        statement(BPF_RET_K, SECCOMP_KILL_PROCESS),
         statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
     ];
     #[cfg(target_arch = "x86_64")]
     instructions.extend([
         jump(BPF_JMP_JSET_K, 0x4000_0000, 0, 1),
-        statement(BPF_RET_K, libc::SECCOMP_RET_KILL_PROCESS),
+        statement(BPF_RET_K, SECCOMP_KILL_PROCESS),
     ]);
     for syscall in blocked {
         instructions.push(jump(
@@ -105,47 +115,31 @@ pub fn install_seccomp(config: &SecurityConfig) -> Result<()> {
             0,
             1,
         ));
-        instructions.push(statement(
-            BPF_RET_K,
-            libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
-        ));
+        instructions.push(statement(BPF_RET_K, SECCOMP_ERRNO_PERMISSION));
     }
     if !config.allow_user_namespaces {
         instructions.extend([
             statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
             jump(
                 BPF_JMP_JEQ_K,
-                u32::try_from(libc::SYS_unshare).context("invalid unshare syscall number")?,
+                u32::try_from(syscall_unshare()).context("invalid unshare syscall number")?,
                 0,
                 3,
             ),
             statement(BPF_LD_W_ABS, SECCOMP_DATA_ARG0_OFFSET),
-            jump(
-                BPF_JMP_JSET_K,
-                u32::try_from(libc::CLONE_NEWUSER).context("invalid CLONE_NEWUSER flag")?,
-                0,
-                1,
-            ),
-            statement(BPF_RET_K, libc::SECCOMP_RET_ERRNO | libc::EPERM as u32),
+            jump(BPF_JMP_JSET_K, namespace_user_flag(), 0, 1),
+            statement(BPF_RET_K, SECCOMP_ERRNO_PERMISSION),
             statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
         ]);
         instructions.push(jump(
             BPF_JMP_JEQ_K,
-            u32::try_from(libc::SYS_clone).context("invalid clone syscall number")?,
+            u32::try_from(syscall_clone()).context("invalid clone syscall number")?,
             0,
             3,
         ));
         instructions.push(statement(BPF_LD_W_ABS, SECCOMP_DATA_ARG0_OFFSET));
-        instructions.push(jump(
-            BPF_JMP_JSET_K,
-            u32::try_from(libc::CLONE_NEWUSER).context("invalid CLONE_NEWUSER flag")?,
-            0,
-            1,
-        ));
-        instructions.push(statement(
-            BPF_RET_K,
-            libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
-        ));
+        instructions.push(jump(BPF_JMP_JSET_K, namespace_user_flag(), 0, 1));
+        instructions.push(statement(BPF_RET_K, SECCOMP_ERRNO_PERMISSION));
         #[cfg(any(
             target_arch = "x86_64",
             target_arch = "aarch64",
@@ -155,77 +149,27 @@ pub fn install_seccomp(config: &SecurityConfig) -> Result<()> {
             statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
             jump(
                 BPF_JMP_JEQ_K,
-                u32::try_from(libc::SYS_clone3).context("invalid clone3 syscall number")?,
+                u32::try_from(syscall_clone3()).context("invalid clone3 syscall number")?,
                 0,
                 1,
             ),
-            statement(BPF_RET_K, libc::SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+            statement(BPF_RET_K, SECCOMP_ERRNO_NOT_IMPLEMENTED),
         ]);
     }
     instructions.extend([
         statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
         jump(
             BPF_JMP_JEQ_K,
-            u32::try_from(libc::SYS_socket).context("invalid socket syscall number")?,
+            u32::try_from(syscall_socket()).context("invalid socket syscall number")?,
             0,
             3,
         ),
         statement(BPF_LD_W_ABS, SECCOMP_DATA_ARG0_OFFSET),
-        jump(BPF_JMP_JEQ_K, libc::AF_ALG as u32, 0, 1),
-        statement(BPF_RET_K, libc::SECCOMP_RET_ERRNO | libc::EPERM as u32),
+        jump(BPF_JMP_JEQ_K, ADDRESS_FAMILY_ALG, 0, 1),
+        statement(BPF_RET_K, SECCOMP_ERRNO_PERMISSION),
     ]);
-    instructions.push(statement(BPF_RET_K, libc::SECCOMP_RET_ALLOW));
-    let program = libc::sock_fprog {
-        len: u16::try_from(instructions.len()).context("seccomp program is too large")?,
-        filter: instructions.as_mut_ptr(),
-    };
-    // SAFETY: program points to a live, initialized BPF instruction array for the duration of prctl.
-    if unsafe {
-        libc::prctl(
-            libc::PR_SET_SECCOMP,
-            libc::SECCOMP_MODE_FILTER,
-            &raw const program,
-        )
-    } < 0
-    {
-        return Err(std::io::Error::last_os_error()).context("failed to install seccomp filter");
-    }
-    Ok(())
-}
-
-fn blocked_syscalls() -> Vec<libc::c_long> {
-    #[cfg(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        all(not(target_os = "android"), not(target_env = "musl"))
-    ))]
-    {
-        let mut blocked = vec![
-            libc::SYS_init_module,
-            libc::SYS_finit_module,
-            libc::SYS_delete_module,
-            libc::SYS_kexec_load,
-            libc::SYS_settimeofday,
-            libc::SYS_adjtimex,
-            libc::SYS_clock_settime,
-            libc::SYS_clock_adjtime,
-        ];
-        blocked.push(libc::SYS_kexec_file_load);
-        blocked
-    }
-    #[cfg(not(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        all(not(target_os = "android"), not(target_env = "musl"))
-    )))]
-    return vec![
-        libc::SYS_init_module,
-        libc::SYS_finit_module,
-        libc::SYS_delete_module,
-        libc::SYS_kexec_load,
-        libc::SYS_settimeofday,
-        libc::SYS_adjtimex,
-        libc::SYS_clock_settime,
-        libc::SYS_clock_adjtime,
-    ];
+    instructions.push(statement(BPF_RET_K, SECCOMP_ALLOW));
+    install_seccomp_filter(&mut instructions).context("failed to install seccomp filter")
 }
 
 const fn audit_arch() -> u32 {
@@ -243,20 +187,20 @@ const fn audit_arch() -> u32 {
     0
 }
 
-const fn statement(code: u16, value: u32) -> libc::sock_filter {
-    libc::sock_filter {
+const fn statement(code: u16, value: u32) -> FilterInstruction {
+    FilterInstruction {
         code,
-        jt: 0,
-        jf: 0,
-        k: value,
+        jump_true: 0,
+        jump_false: 0,
+        value,
     }
 }
 
-const fn jump(code: u16, value: u32, jt: u8, jf: u8) -> libc::sock_filter {
-    libc::sock_filter {
+const fn jump(code: u16, value: u32, jt: u8, jf: u8) -> FilterInstruction {
+    FilterInstruction {
         code,
-        jt,
-        jf,
-        k: value,
+        jump_true: jt,
+        jump_false: jf,
+        value,
     }
 }

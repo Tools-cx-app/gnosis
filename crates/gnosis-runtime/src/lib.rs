@@ -54,5 +54,5 @@ impl Runtime {
 /// Reports whether the current kernel exposes pidfd process handles.
 #[must_use]
 pub fn pidfd_available() -> bool {
-    host::process::ProcessHandle::open(nix::unistd::getpid()).is_ok()
+    host::process::ProcessHandle::open(gnosis_helper::current_pid()).is_ok()
 }

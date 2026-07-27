@@ -8,17 +8,9 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use gnosis_config::{AndroidConfig, NetworkMode};
-use nix::{
-    sched::{CloneFlags, setns},
-    sys::{
-        signal::{Signal, kill},
-        socket::{AddressFamily, SockFlag, SockType, socketpair},
-        wait::{WaitStatus, waitpid},
-    },
-    unistd::{
-        ForkResult, Gid, Pid, Uid, chdir, chroot, execve, fchdir, fork, getpid, initgroups, setgid,
-        setuid,
-    },
+use gnosis_helper::{
+    ForkResult, NamespaceFlags, Signal, WaitStatus, chdir, chroot, current_pid, execve, fchdir,
+    fork, init_groups, kill, kill_process_group, set_gid, set_uid, setns, socket_pair, waitpid,
 };
 
 use crate::{
@@ -65,14 +57,7 @@ impl Runtime {
             .collect::<std::io::Result<Vec<_>>>()?;
         let terminal_socket = login_user
             .is_some()
-            .then(|| {
-                socketpair(
-                    AddressFamily::Unix,
-                    SockType::Stream,
-                    None,
-                    SockFlag::SOCK_CLOEXEC,
-                )
-            })
+            .then(socket_pair)
             .transpose()
             .context("failed to create interactive PTY channel")?;
         drop(lock);
@@ -92,7 +77,7 @@ impl Runtime {
                     drop(receiver);
                     terminal::proxy(&master, child, None)
                 } else {
-                    waitpid(child, None).context("failed waiting for command")
+                    waitpid(child, false).context("failed waiting for command")
                 };
                 let status = match status {
                     Ok(status) => status,
@@ -109,7 +94,7 @@ impl Runtime {
                     sender
                 });
                 for (name, namespace) in &namespaces {
-                    setns(namespace.as_fd(), CloneFlags::empty()).unwrap_or_else(|error| {
+                    setns(namespace.as_fd(), NamespaceFlags::EMPTY).unwrap_or_else(|error| {
                         exec_failure(&format!("failed to join {name} namespace: {error}"))
                     });
                 }
@@ -122,7 +107,7 @@ impl Runtime {
                 )
                 .unwrap_or_else(|error| exec_failure(&error.to_string()));
                 cgroup
-                    .attach(getpid().as_raw())
+                    .attach(current_pid())
                     .unwrap_or_else(|error| exec_failure(&error.to_string()));
                 let console = terminal_sender.map(|sender| {
                     let console = terminal::Console::open()
@@ -146,10 +131,10 @@ impl Runtime {
                 match unsafe { fork() }.unwrap_or_else(|error| {
                     exec_failure(&format!("failed to enter PID namespace: {error}"))
                 }) {
-                    ForkResult::Parent { child } => match waitpid(child, None) {
+                    ForkResult::Parent { child } => match waitpid(child, false) {
                         Ok(WaitStatus::Exited(_, code)) => std::process::exit(code),
                         Ok(WaitStatus::Signaled(_, signal, _)) => {
-                            std::process::exit(128 + signal as i32)
+                            std::process::exit(128 + signal.raw())
                         }
                         _ => std::process::exit(125),
                     },
@@ -194,7 +179,9 @@ fn command_status(status: WaitStatus) -> Result<()> {
     match status {
         WaitStatus::Exited(_, 0) => Ok(()),
         WaitStatus::Exited(_, code) => bail!("command exited with status {code}"),
-        WaitStatus::Signaled(_, signal, _) => bail!("command terminated by {signal}"),
+        WaitStatus::Signaled(_, signal, _) => {
+            bail!("command terminated by {}", signal_name(signal.raw()))
+        }
         status => bail!("unexpected command status: {status:?}"),
     }
 }
@@ -228,9 +215,9 @@ fn exec_login(user: &str, configured: &BTreeMap<String, String>, android: &Andro
         exec_failure("login user has no usable absolute shell");
     }
     let user_name = result_or_exit(CString::new(user));
-    result_or_exit(initgroups(&user_name, Gid::from_raw(account.gid)));
-    result_or_exit(setgid(Gid::from_raw(account.gid)));
-    result_or_exit(setuid(Uid::from_raw(account.uid)));
+    result_or_exit(init_groups(&user_name, account.gid));
+    result_or_exit(set_gid(account.gid));
+    result_or_exit(set_uid(account.uid));
     result_or_exit(chdir(Path::new(&account.home)));
     let shell = result_or_exit(CString::new(account.shell.as_str()));
     let shell_name = Path::new(&account.shell)
@@ -286,14 +273,51 @@ fn valid_login_name(user: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
-fn terminate_and_reap(child: Pid) {
-    let _ = kill(child, Signal::SIGKILL);
-    let _ = waitpid(child, None);
+fn terminate_and_reap(child: i32) {
+    let _ = kill(child, Signal::Kill);
+    let _ = waitpid(child, false);
 }
 
-fn terminate_session_and_reap(child: Pid) {
-    let _ = nix::sys::signal::killpg(child, Signal::SIGKILL);
+fn terminate_session_and_reap(child: i32) {
+    let _ = kill_process_group(child, Signal::Kill);
     terminate_and_reap(child);
+}
+
+fn signal_name(signal: i32) -> &'static str {
+    match signal {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        5 => "SIGTRAP",
+        6 => "SIGABRT",
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        10 => "SIGUSR1",
+        11 => "SIGSEGV",
+        12 => "SIGUSR2",
+        13 => "SIGPIPE",
+        14 => "SIGALRM",
+        15 => "SIGTERM",
+        16 => "SIGSTKFLT",
+        17 => "SIGCHLD",
+        18 => "SIGCONT",
+        19 => "SIGSTOP",
+        20 => "SIGTSTP",
+        21 => "SIGTTIN",
+        22 => "SIGTTOU",
+        23 => "SIGURG",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        26 => "SIGVTALRM",
+        27 => "SIGPROF",
+        28 => "SIGWINCH",
+        29 => "SIGIO",
+        30 => "SIGPWR",
+        31 => "SIGSYS",
+        _ => "unknown signal",
+    }
 }
 
 fn exec_failure(message: &str) -> ! {
