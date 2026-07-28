@@ -174,7 +174,7 @@ impl Network {
         run("ip", &["link", "set", "lo", "up"])?;
         if matches!(
             config.container.network,
-            NetworkMode::Nat | NetworkMode::Gateway
+            NetworkMode::Nat | NetworkMode::Gateway | NetworkMode::Dhcp
         ) {
             run("ip", &["link", "set", peer_name, "name", "eth0"])?;
             run("ip", &["link", "set", "eth0", "up"])?;
@@ -195,6 +195,24 @@ impl Network {
             }
         }
         Ok(())
+    }
+
+    pub fn setup_dhcp(config: &Config) -> Result<()> {
+        if config.container.network != NetworkMode::Dhcp {
+            return Ok(());
+        }
+        if command_exists("udhcpc") {
+            return run("udhcpc", &["-n", "-q", "-i", "eth0"])
+                .context("DHCP configuration failed with udhcpc");
+        }
+        if command_exists("dhclient") {
+            return run("dhclient", &["-1", "-v", "eth0"])
+                .context("DHCP configuration failed with dhclient");
+        }
+        if command_exists("dhcpcd") {
+            return run("dhcpcd", &["-1", "eth0"]).context("DHCP configuration failed with dhcpcd");
+        }
+        bail!("DHCP mode requires udhcpc, dhclient, or dhcpcd in the container rootfs")
     }
 
     pub fn write_dns(config: &Config, rootfs: &Path) -> Result<()> {
@@ -432,6 +450,13 @@ fn command(program: &str) -> Command {
         .env_clear()
         .env("PATH", "/system/bin:/usr/sbin:/sbin:/usr/bin:/bin");
     command
+}
+
+fn command_exists(program: &str) -> bool {
+    ["/usr/sbin", "/sbin", "/usr/bin", "/bin", "/system/bin"]
+        .iter()
+        .map(|directory| Path::new(directory).join(program))
+        .any(|path| path.is_file())
 }
 
 fn masked_network(address: std::net::Ipv4Addr, prefix: u8) -> std::net::Ipv4Addr {

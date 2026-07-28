@@ -144,6 +144,7 @@ pub enum NetworkMode {
     None,
     Nat,
     Gateway,
+    Dhcp,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

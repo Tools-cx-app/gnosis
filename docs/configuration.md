@@ -41,7 +41,7 @@ Names may contain ASCII letters, digits, `.`, `_`, and `-`. The values
 
 ## Networking
 
-Network modes are `host`, `none`, `nat`, and `gateway`.
+Network modes are `host`, `none`, `nat`, `gateway`, and `dhcp`.
 
 ```toml
 [container.network_options]
@@ -61,6 +61,15 @@ protocol = "tcp"
 NAT and bridge setup currently use fixed host `ip` and `iptables`
 executables. `gateway` attaches the container veth to the existing interface
 named by `gateway_bridge`. It does not create or manage that bridge.
+`dhcp` uses the same existing bridge and runs the first DHCP client found in
+the container rootfs: `udhcpc`, `dhclient`, or `dhcpcd`.
+
+```toml
+network = "dhcp"
+
+[container.network_options]
+gateway_bridge = "br0"
+```
 
 ## Resources and security
 

@@ -22,7 +22,7 @@ but operators should evaluate it on disposable systems before relying on it.
 ## Current limitations
 
 - Networking depends on host `ip` and `iptables`
-- DHCP, port ranges, and automatic upstream monitoring are not implemented
+- Port ranges and automatic upstream monitoring are not implemented
 - Interactive sessions cannot be detached and reattached
 - Recovery requires the protected host recovery record
 - Crash reconciliation is incomplete for some host-global resources

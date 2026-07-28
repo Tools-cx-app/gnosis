@@ -150,10 +150,13 @@ impl Config {
             valid_interface_name(&self.container.network_options.bridge),
             "invalid NAT bridge name"
         );
-        if self.container.network == NetworkMode::Gateway {
+        if matches!(
+            self.container.network,
+            NetworkMode::Gateway | NetworkMode::Dhcp
+        ) {
             ensure!(
                 valid_interface_name(&self.container.network_options.gateway_bridge),
-                "gateway mode requires a valid network_options.gateway_bridge"
+                "gateway and dhcp modes require a valid network_options.gateway_bridge"
             );
         }
         for dns in &self.container.network_options.dns {

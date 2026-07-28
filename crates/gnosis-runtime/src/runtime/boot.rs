@@ -201,6 +201,7 @@ impl Runtime {
         self.mount_binds_inside()?;
         unmount(Path::new("/.old_root"), true).context("failed to detach old root")?;
         fs::remove_dir("/.old_root").ok();
+        Network::setup_dhcp(&self.config)?;
         Network::write_dns(&self.config, Path::new("/"))?;
         set_container_hostname(&self.config.container.hostname)?;
 

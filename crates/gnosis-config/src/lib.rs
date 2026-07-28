@@ -125,6 +125,17 @@ mod tests {
     }
 
     #[test]
+    fn dhcp_requires_an_existing_bridge_name() {
+        let (_directory, mut config) = test_config();
+        config.container.network = NetworkMode::Dhcp;
+        config.container.network_options.gateway_bridge.clear();
+        assert!(config.validate().is_err());
+
+        config.container.network_options.gateway_bridge = "br0".to_owned();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn validates_resource_limit_ranges() {
         let (_directory, mut config) = test_config();
         config.container.resources.memory_bytes = Some(4 * 1024 * 1024 - 1);
