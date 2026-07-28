@@ -20,21 +20,7 @@ impl Cgroup {
         required: bool,
         bootstrap: bool,
     ) -> Result<Self> {
-        if !required
-            && resources.memory_bytes.is_none()
-            && resources.cpu_quota.is_none()
-            && resources.pids.is_none()
-        {
-            return Ok(Self {
-                paths: Vec::new(),
-                unified: false,
-            });
-        }
-        if resources.memory_bytes.is_none()
-            && resources.cpu_quota.is_none()
-            && resources.pids.is_none()
-        {
-            fs::create_dir_all(workdir)?;
+        if !cgroup_required(resources, required) {
             return Ok(Self {
                 paths: Vec::new(),
                 unified: false,
@@ -59,40 +45,40 @@ impl Cgroup {
                 paths: vec![path],
                 unified: true,
             });
-        } else {
-            let roots = ensure_cgroup1_roots(resources, required, bootstrap)?;
-            let mut paths = Vec::new();
-            for (controller, root) in roots {
-                let path = root.join("gnosis").join(name);
-                fs::create_dir_all(&path)
-                    .with_context(|| format!("failed to create cgroup {}", path.display()))?;
-                match controller {
-                    Controller::Memory => {
-                        if let Some(value) = resources.memory_bytes {
-                            fs::write(path.join("memory.limit_in_bytes"), value.to_string())?;
-                        }
-                    }
-                    Controller::Cpu => {
-                        if let Some(quota) = resources.cpu_quota {
-                            let period = resources.cpu_period.unwrap_or(100_000);
-                            fs::write(path.join("cpu.cfs_quota_us"), quota.to_string())?;
-                            fs::write(path.join("cpu.cfs_period_us"), period.to_string())?;
-                        }
-                    }
-                    Controller::Pids => {
-                        if let Some(value) = resources.pids {
-                            fs::write(path.join("pids.max"), value.to_string())?;
-                        }
+        }
+
+        let roots = ensure_cgroup1_roots(resources, required, bootstrap)?;
+        let mut paths = Vec::new();
+        for (controller, root) in roots {
+            let path = root.join("gnosis").join(name);
+            fs::create_dir_all(&path)
+                .with_context(|| format!("failed to create cgroup {}", path.display()))?;
+            match controller {
+                Controller::Memory => {
+                    if let Some(value) = resources.memory_bytes {
+                        fs::write(path.join("memory.limit_in_bytes"), value.to_string())?;
                     }
                 }
-                paths.push(path);
+                Controller::Cpu => {
+                    if let Some(quota) = resources.cpu_quota {
+                        let period = resources.cpu_period.unwrap_or(100_000);
+                        fs::write(path.join("cpu.cfs_quota_us"), quota.to_string())?;
+                        fs::write(path.join("cpu.cfs_period_us"), period.to_string())?;
+                    }
+                }
+                Controller::Pids => {
+                    if let Some(value) = resources.pids {
+                        fs::write(path.join("pids.max"), value.to_string())?;
+                    }
+                }
             }
-            fs::create_dir_all(workdir)?;
-            Ok(Self {
-                paths,
-                unified: false,
-            })
+            paths.push(path);
         }
+        fs::create_dir_all(workdir)?;
+        Ok(Self {
+            paths,
+            unified: false,
+        })
     }
 
     pub fn attach(&self, pid: i32) -> Result<()> {
@@ -118,6 +104,13 @@ impl Cgroup {
     pub fn unified(&self) -> bool {
         self.unified
     }
+}
+
+fn cgroup_required(resources: &ResourceConfig, required: bool) -> bool {
+    required
+        || resources.memory_bytes.is_some()
+        || resources.cpu_quota.is_some()
+        || resources.pids.is_some()
 }
 
 fn ensure_cgroup2_root(bootstrap: bool) -> Result<Option<PathBuf>> {
@@ -306,8 +299,25 @@ impl Drop for Cgroup {
 
 #[cfg(test)]
 mod tests {
-    use super::{Controller, parse_cgroup1_roots};
+    use super::{Controller, cgroup_required, parse_cgroup1_roots, requested_controllers};
+    use gnosis_config::ResourceConfig;
     use std::path::PathBuf;
+
+    #[test]
+    fn systemd_requires_cgroup_without_resource_limits() {
+        let resources = ResourceConfig::default();
+
+        assert!(cgroup_required(&resources, true));
+        assert_eq!(
+            requested_controllers(&resources, true),
+            vec![Controller::Pids]
+        );
+    }
+
+    #[test]
+    fn custom_init_skips_cgroup_without_resource_limits() {
+        assert!(!cgroup_required(&ResourceConfig::default(), false));
+    }
 
     #[test]
     fn parses_controller_mounts_from_mountinfo() {
