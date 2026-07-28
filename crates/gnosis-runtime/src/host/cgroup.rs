@@ -59,40 +59,40 @@ impl Cgroup {
                 paths: vec![path],
                 unified: true,
             });
-        }
-
-        let roots = ensure_cgroup1_roots(resources, required, bootstrap)?;
-        let mut paths = Vec::new();
-        for (controller, root) in roots {
-            let path = root.join("gnosis").join(name);
-            fs::create_dir_all(&path)
-                .with_context(|| format!("failed to create cgroup {}", path.display()))?;
-            match controller {
-                Controller::Memory => {
-                    if let Some(value) = resources.memory_bytes {
-                        fs::write(path.join("memory.limit_in_bytes"), value.to_string())?;
+        } else {
+            let roots = ensure_cgroup1_roots(resources, required, bootstrap)?;
+            let mut paths = Vec::new();
+            for (controller, root) in roots {
+                let path = root.join("gnosis").join(name);
+                fs::create_dir_all(&path)
+                    .with_context(|| format!("failed to create cgroup {}", path.display()))?;
+                match controller {
+                    Controller::Memory => {
+                        if let Some(value) = resources.memory_bytes {
+                            fs::write(path.join("memory.limit_in_bytes"), value.to_string())?;
+                        }
+                    }
+                    Controller::Cpu => {
+                        if let Some(quota) = resources.cpu_quota {
+                            let period = resources.cpu_period.unwrap_or(100_000);
+                            fs::write(path.join("cpu.cfs_quota_us"), quota.to_string())?;
+                            fs::write(path.join("cpu.cfs_period_us"), period.to_string())?;
+                        }
+                    }
+                    Controller::Pids => {
+                        if let Some(value) = resources.pids {
+                            fs::write(path.join("pids.max"), value.to_string())?;
+                        }
                     }
                 }
-                Controller::Cpu => {
-                    if let Some(quota) = resources.cpu_quota {
-                        let period = resources.cpu_period.unwrap_or(100_000);
-                        fs::write(path.join("cpu.cfs_quota_us"), quota.to_string())?;
-                        fs::write(path.join("cpu.cfs_period_us"), period.to_string())?;
-                    }
-                }
-                Controller::Pids => {
-                    if let Some(value) = resources.pids {
-                        fs::write(path.join("pids.max"), value.to_string())?;
-                    }
-                }
+                paths.push(path);
             }
-            paths.push(path);
+            fs::create_dir_all(workdir)?;
+            Ok(Self {
+                paths,
+                unified: false,
+            })
         }
-        fs::create_dir_all(workdir)?;
-        Ok(Self {
-            paths,
-            unified: false,
-        })
     }
 
     pub fn attach(&self, pid: i32) -> Result<()> {
