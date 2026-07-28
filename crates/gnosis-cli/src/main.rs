@@ -100,6 +100,12 @@ fn check() -> Result<()> {
         "cgroup v2: {}",
         std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists()
     );
+    println!(
+        "cgroup v1: {}",
+        std::fs::read_to_string("/proc/self/mountinfo").is_ok_and(|mountinfo| mountinfo
+            .lines()
+            .any(|line| { line.split_whitespace().any(|field| field == "cgroup") }))
+    );
     println!("pidfd: {}", gnosis_runtime::pidfd_available());
     println!("ip command: {}", system_command_exists("ip"));
     println!("iptables command: {}", system_command_exists("iptables"));

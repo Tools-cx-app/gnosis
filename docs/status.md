@@ -12,7 +12,7 @@ but operators should evaluate it on disposable systems before relying on it.
 - Mount, UTS, IPC, PID, and optional network namespaces
 - Host, isolated, NAT, and existing-bridge networking
 - TCP/UDP single-port forwarding with rollback and owned rule cleanup
-- cgroup v2 memory, CPU, and PID limits
+- cgroup v1 and v2 memory, CPU, and PID limits
 - Persistent UUIDs and PID-reuse-resistant process identity
 - Init-aware graceful shutdown and internal reboot generations
 - PTY consoles and interactive sessions using descriptor passing
@@ -22,7 +22,6 @@ but operators should evaluate it on disposable systems before relying on it.
 ## Current limitations
 
 - Networking depends on host `ip` and `iptables`
-- cgroup v1 is not supported
 - DHCP, port ranges, and automatic upstream monitoring are not implemented
 - Interactive sessions cannot be detached and reattached
 - Recovery requires the protected host recovery record

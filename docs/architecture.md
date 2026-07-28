@@ -71,7 +71,7 @@ The main modules are:
 - `host/terminal.rs`: PTY allocation, descriptor passing, and console proxying
 - `host/rootfs.rs`: directory/image rootfs preparation and loop devices
 - `host/network.rs`: veth, bridges, NAT, forwarding, and rollback
-- `host/cgroup.rs`: cgroup v2 resource limits
+- `host/cgroup.rs`: cgroup v1/v2 resource limits and hierarchy detection
 - `host/android.rs`: Android host integration on Android targets
 
 ## State and trust

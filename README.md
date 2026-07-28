@@ -16,7 +16,7 @@ resources when compiled for and executed on Android.
 - Directory, ext4 image, btrfs image, and block-device root filesystems
 - Mount, PID, UTS, IPC, and optional network namespaces
 - Host, isolated, NAT, and existing-bridge networking
-- cgroup v2 memory, CPU, and process limits
+- cgroup v1 and v2 memory, CPU, and process limits
 - Bind mounts and volatile OverlayFS
 - Background monitoring and foreground PTY consoles
 - Container entry and command execution without an external `nsenter`
@@ -30,7 +30,7 @@ resources when compiled for and executed on Android.
 - Root privileges
 - Rust 1.85 or newer for the 2024 edition
 - `ip` and `iptables` for NAT or bridge networking
-- cgroup v2 when resource limits are configured
+- cgroup v1 or v2 when resource limits are configured
 - A prepared Linux root filesystem containing an init executable
 
 Run the host capability checks before starting a container:

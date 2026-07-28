@@ -76,9 +76,10 @@ read_only_sys = true
 allow_user_namespaces = false
 ```
 
-Resource limits require cgroup v2. Memory must be at least 4 MiB. CPU quota and
-period must be configured together; quota must be at least 1000. The PID limit
-must be between 1 and 4194304.
+Resource limits use cgroup v2 when available and otherwise fall back to cgroup
+v1. Memory must be at least 4 MiB. CPU quota and period must be configured
+together; quota must be at least 1000. The PID limit must be between 1 and
+4194304.
 
 ## Environment and mounts
 

@@ -13,7 +13,7 @@ Linux namespace、挂载、cgroup、网络及持久化 TOML 配置管理轻量�
 - 目录、ext4 镜像、btrfs 镜像和块设备 rootfs
 - Mount、PID、UTS、IPC 以及可选的 Network namespace
 - Host、隔离、NAT 和已有网桥网络模式
-- cgroup v2 内存、CPU 和进程数限制
+- cgroup v1/v2 内存、CPU 和进程数限制
 - Bind mount 和临时 OverlayFS
 - 后台 monitor 与前台 PTY 控制台
 - 无需外部 `nsenter` 的容器进入和命令执行
@@ -27,7 +27,7 @@ Linux namespace、挂载、cgroup、网络及持久化 TOML 配置管理轻量�
 - root 权限
 - Rust 1.85 或更高版本
 - NAT/网桥网络所需的 `ip` 和 `iptables`
-- 配置资源限制时可用的 cgroup v2
+- 配置资源限制时可用的 cgroup v1 或 v2
 - 包含 init 可执行文件的 Linux rootfs
 
 启动容器前可检查主机能力：
