@@ -1,11 +1,11 @@
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use gnosis_config::Config;
 use gnosis_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, OPEN_NONBLOCK, Signal, realtime_min};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,24 @@ impl Init {
         Self {
             path: config.container.init.clone(),
         }
+    }
+
+    pub(crate) fn prepare(&self, rootfs: &Path) -> Result<()> {
+        let relative = self
+            .path
+            .strip_prefix("/")
+            .map_err(|_| anyhow::anyhow!("container.init must be an absolute path"))?;
+        let init = rootfs.join(relative);
+        let metadata = init
+            .metadata()
+            .map_err(|error| anyhow::anyhow!("init does not exist: {}: {error}", init.display()))?;
+        if !metadata.is_file() {
+            bail!("init is not a regular file: {}", init.display());
+        }
+        if metadata.permissions().mode() & 0o111 == 0 {
+            bail!("init is not executable: {}", init.display());
+        }
+        Ok(())
     }
 
     pub(crate) fn detect(&self, rootfs: &Path) -> InitSystem {
@@ -221,6 +239,7 @@ fn read_prefix(path: &Path, limit: usize) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     fn create(root: &Path, path: &str, content: &[u8]) {
         let path = root.join(path);
@@ -269,6 +288,23 @@ mod tests {
             detect(nix.path(), Path::new("/sbin/init")),
             InitSystem::Unknown
         );
+    }
+
+    #[test]
+    fn validates_init_inside_rootfs() {
+        let root = tempfile::tempdir().unwrap();
+        create(root.path(), "sbin/init", b"init");
+        let init = Init {
+            path: PathBuf::from("/sbin/init"),
+        };
+
+        assert!(init.prepare(root.path()).is_err());
+        fs::set_permissions(
+            root.path().join("sbin/init"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert!(init.prepare(root.path()).is_ok());
     }
 
     #[test]

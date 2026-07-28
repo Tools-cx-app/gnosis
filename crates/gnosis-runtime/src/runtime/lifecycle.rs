@@ -119,6 +119,7 @@ impl Runtime {
         )
         .context("failed to make monitor mount tree private")?;
         let rootfs = self.rootfs.prepare()?;
+        self.init.prepare(rootfs.as_ref())?;
         let init_system = self.init.detect(rootfs.as_ref());
         let mut cgroup = Cgroup::create(
             &self.workdir,
