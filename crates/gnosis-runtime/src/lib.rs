@@ -11,7 +11,7 @@ use gnosis_config::Config;
 use crate::{container::init::Init, host::rootfs::Rootfs};
 pub use crate::{
     container::init::InitSystem,
-    runtime::state::{ContainerState, ContainerUsage},
+    runtime::state::{ContainerInfo, ContainerState},
 };
 
 /// A configured container runtime.

@@ -51,7 +51,6 @@ redirection, or compound commands.
 ```bash
 sudo gnosis --config debian.toml info
 sudo gnosis --config debian.toml pid
-sudo gnosis --config debian.toml usage
 sudo gnosis --config debian.toml show
 sudo gnosis --config debian.toml scan
 ```
@@ -60,8 +59,8 @@ sudo gnosis --config debian.toml scan
 procfs for namespace PID 1 processes and reconstructs missing state only when
 the in-container identity and root-owned recovery record agree.
 
-`usage` prints human-readable key/value lines for uptime, memory, and process
-counts.
+`info` prints container identity, init and monitor PIDs, init system, uptime,
+memory use, process count, generation, rootfs, and UUID.
 
 ## Host checks
 

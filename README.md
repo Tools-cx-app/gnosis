@@ -72,9 +72,8 @@ stop                   Gracefully stop it
 restart [--foreground] Stop and start it
 enter [USER]           Open an interactive login, defaulting to root
 run COMMAND...          Run a non-interactive command
-info                    Show detailed live state
+info                    Show live state and resource usage
 pid                     Print the container init PID
-usage                   Show uptime, memory, and process counts
 show                    List containers in the configured work directory
 scan                    Recover missing state for validated live containers
 check                   Probe required host capabilities

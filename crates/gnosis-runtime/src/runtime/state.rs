@@ -39,20 +39,69 @@ pub struct ContainerState {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ContainerUsage {
+pub struct ContainerInfo {
+    pub name: String,
+    pub init_pid: i32,
+    pub monitor_pid: i32,
+    pub rootfs: PathBuf,
+    pub uuid: Uuid,
+    pub init_system: InitSystem,
+    pub generation: u64,
     pub uptime_seconds: u64,
     pub memory_kb: u64,
     pub processes: usize,
 }
 
+impl std::fmt::Display for ContainerInfo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(formatter, "{}", self.name)?;
+        writeln!(
+            formatter,
+            "{:>12}: active (running) for {}",
+            "Active",
+            format_duration(self.uptime_seconds)
+        )?;
+        writeln!(
+            formatter,
+            "{:>12}: {} ({})",
+            "Main PID", self.init_pid, self.init_system
+        )?;
+        writeln!(formatter, "{:>12}: {}", "Monitor PID", self.monitor_pid)?;
+        writeln!(formatter, "{:>12}: {}", "Tasks", self.processes)?;
+        writeln!(
+            formatter,
+            "{:>12}: {}",
+            "Memory",
+            format_memory(self.memory_kb)
+        )?;
+        writeln!(formatter, "{:>12}: {}", "Generation", self.generation)?;
+        writeln!(formatter, "{:>12}: {}", "Rootfs", self.rootfs.display())?;
+        write!(formatter, "{:>12}: {}", "UUID", self.uuid)
+    }
+}
+
 impl Runtime {
-    /// Returns the current container state.
+    /// Returns the current container state and resource usage.
     ///
     /// # Errors
     ///
-    /// Returns an error when state cannot be read or the container is stopped.
-    pub fn info(&self) -> Result<ContainerState> {
-        self.require_state()
+    /// Returns an error when state or procfs cannot be read, or the container is stopped.
+    pub fn info(&self) -> Result<ContainerInfo> {
+        let state = self.require_state()?;
+        let (memory_kb, processes) = collect_usage(&state)?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        Ok(ContainerInfo {
+            name: state.name,
+            init_pid: state.init_pid,
+            monitor_pid: state.monitor_pid,
+            rootfs: state.rootfs,
+            uuid: state.uuid,
+            init_system: state.init_system,
+            generation: state.generation,
+            uptime_seconds: now.saturating_sub(state.started_at_unix),
+            memory_kb,
+            processes,
+        })
     }
 
     /// Returns the validated container init PID.
@@ -62,45 +111,6 @@ impl Runtime {
     /// Returns an error when the container is not running.
     pub fn pid(&self) -> Result<i32> {
         Ok(self.require_state()?.init_pid)
-    }
-
-    /// Collects current process count, RSS, and uptime from procfs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the container state or procfs cannot be read.
-    pub fn usage(&self) -> Result<ContainerUsage> {
-        let state = self.require_state()?;
-        let mut memory_kb = 0;
-        let mut processes = 0;
-        for entry in fs::read_dir("/proc")? {
-            let entry = entry?;
-            let Some(pid) = entry
-                .file_name()
-                .to_str()
-                .and_then(|value| value.parse::<i32>().ok())
-            else {
-                continue;
-            };
-            if namespace_inode(pid, "pid").ok() != Some(state.pid_namespace_inode) {
-                continue;
-            }
-            processes += 1;
-            if let Ok(status) = fs::read_to_string(entry.path().join("status")) {
-                memory_kb += status
-                    .lines()
-                    .find_map(|line| line.strip_prefix("VmRSS:"))
-                    .and_then(|value| value.split_whitespace().next())
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0);
-            }
-        }
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        Ok(ContainerUsage {
-            uptime_seconds: now.saturating_sub(state.started_at_unix),
-            memory_kb,
-            processes,
-        })
     }
 
     /// Lists live containers tracked by the configured work directory.
@@ -321,6 +331,66 @@ impl Runtime {
     }
 }
 
+fn collect_usage(state: &ContainerState) -> Result<(u64, usize)> {
+    let mut memory_kb = 0;
+    let mut processes = 0;
+    for entry in fs::read_dir("/proc")? {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if namespace_inode(pid, "pid").ok() != Some(state.pid_namespace_inode) {
+            continue;
+        }
+        processes += 1;
+        if let Ok(status) = fs::read_to_string(entry.path().join("status")) {
+            memory_kb += status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmRSS:"))
+                .and_then(|value| value.split_whitespace().next())
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+        }
+    }
+    Ok((memory_kb, processes))
+}
+
+fn format_duration(seconds: u64) -> String {
+    let days = seconds / 86_400;
+    let hours = seconds % 86_400 / 3_600;
+    let minutes = seconds % 3_600 / 60;
+    let seconds = seconds % 60;
+    if days > 0 {
+        format!("{days}d {hours:02}h {minutes:02}m {seconds:02}s")
+    } else if hours > 0 {
+        format!("{hours}h {minutes:02}m {seconds:02}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn format_memory(kibibytes: u64) -> String {
+    if kibibytes >= 1024 * 1024 {
+        format_unit(kibibytes, 1024 * 1024, "GiB")
+    } else if kibibytes >= 1024 {
+        format_unit(kibibytes, 1024, "MiB")
+    } else {
+        format!("{kibibytes} KiB")
+    }
+}
+
+fn format_unit(value: u64, unit: u64, suffix: &str) -> String {
+    let whole = value / unit;
+    let decimal = value % unit * 10 / unit;
+    format!("{whole}.{decimal} {suffix}")
+}
+
 pub(crate) fn validate_process_identity(state: &ContainerState) -> bool {
     host_boot_id().is_ok_and(|value| value == state.host_boot_id)
         && process_start_time(state.init_pid).is_ok_and(|value| value == state.init_start_time)
@@ -524,5 +594,40 @@ mod tests {
         write_state_atomic(&path, &state).unwrap();
         assert_eq!(read_state(&path).unwrap().uuid, Uuid::nil());
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn formats_uptime() {
+        assert_eq!(format_duration(0), "0s");
+        assert_eq!(format_duration(62), "1m 02s");
+        assert_eq!(format_duration(3_723), "1h 02m 03s");
+        assert_eq!(format_duration(93_784), "1d 02h 03m 04s");
+    }
+
+    #[test]
+    fn formats_memory() {
+        assert_eq!(format_memory(512), "512 KiB");
+        assert_eq!(format_memory(1_536), "1.5 MiB");
+        assert_eq!(format_memory(1_572_864), "1.5 GiB");
+    }
+
+    #[test]
+    fn displays_container_info() {
+        let info = ContainerInfo {
+            name: "test".to_owned(),
+            init_pid: 123,
+            monitor_pid: 122,
+            rootfs: PathBuf::from("/rootfs"),
+            uuid: Uuid::nil(),
+            init_system: crate::InitSystem::Systemd,
+            generation: 1,
+            uptime_seconds: 3_723,
+            memory_kb: 1_536,
+            processes: 4,
+        };
+        assert_eq!(
+            info.to_string(),
+            "test\n      Active: active (running) for 1h 02m 03s\n    Main PID: 123 (systemd)\n Monitor PID: 122\n       Tasks: 4\n      Memory: 1.5 MiB\n  Generation: 1\n      Rootfs: /rootfs\n        UUID: 00000000-0000-0000-0000-000000000000"
+        );
     }
 }

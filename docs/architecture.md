@@ -62,7 +62,7 @@ The main modules are:
 - `runtime/lifecycle.rs`: start, monitor, boot generations, shutdown, and cleanup
 - `runtime/boot.rs`: namespace-internal mounts, pivot, environment, and init execution
 - `runtime/supervisor.rs`: wait/retry, signal policy, and child supervision helpers
-- `runtime/state.rs`: public state types, secure persistence, usage, and recovery
+- `runtime/state.rs`: public state types, secure persistence, metrics, and recovery
 - `runtime/execute.rs`: namespace entry, command execution, and interactive login
 - `container/environment.rs`: deterministic init and session environments
 - `container/init.rs`: init-family detection and shutdown protocols

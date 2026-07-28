@@ -37,7 +37,6 @@ enum Commands {
     },
     Info,
     Pid,
-    Usage,
     Show,
     Scan,
     Check,
@@ -62,23 +61,8 @@ fn main() -> Result<()> {
         }
         Commands::Enter { user } => runtime.enter(&user)?,
         Commands::Run { command } => runtime.run(&command)?,
-        Commands::Info => {
-            let state = runtime.info()?;
-            println!("name: {}", state.name);
-            println!("init pid: {}", state.init_pid);
-            println!("monitor pid: {}", state.monitor_pid);
-            println!("init system: {}", state.init_system);
-            println!("generation: {}", state.generation);
-            println!("rootfs: {}", state.rootfs.display());
-            println!("uuid: {}", state.uuid);
-        }
+        Commands::Info => println!("{}", runtime.info()?),
         Commands::Pid => println!("{}", runtime.pid()?),
-        Commands::Usage => {
-            let usage = runtime.usage()?;
-            println!("uptime: {}s", usage.uptime_seconds);
-            println!("memory: {} KiB", usage.memory_kb);
-            println!("processes: {}", usage.processes);
-        }
         Commands::Show => {
             println!("NAME\tPID\tROOTFS");
             for state in runtime.list()? {

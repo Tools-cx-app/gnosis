@@ -7,7 +7,7 @@ but operators should evaluate it on disposable systems before relying on it.
 
 - Start, stop, restart, foreground console, and background monitoring
 - Interactive `enter` and non-interactive `run`
-- PID, info, usage, list, host check, and validated recovery scan
+- PID, detailed info, list, host check, and validated recovery scan
 - Directory, ext4, btrfs, block-device, and volatile OverlayFS rootfs modes
 - Mount, UTS, IPC, PID, and optional network namespaces
 - Host, isolated, NAT, and existing-bridge networking
