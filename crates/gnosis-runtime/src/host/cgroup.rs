@@ -154,15 +154,14 @@ fn ensure_cgroup2_root(bootstrap: bool) -> Result<Option<PathBuf>> {
 }
 
 fn cgroup2_root() -> Option<PathBuf> {
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo").ok()?;
-    mountinfo.lines().find_map(|line| {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        let separator = fields.iter().position(|field| *field == "-")?;
-        if fields.get(separator + 1) != Some(&"cgroup2") {
-            return None;
-        }
-        fields.get(4).map(PathBuf::from)
-    })
+    procfs::process::Process::myself()
+        .ok()?
+        .mountinfo()
+        .ok()?
+        .0
+        .into_iter()
+        .find(|mount| mount.fs_type == "cgroup2")
+        .map(|mount| mount.mount_point)
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -260,31 +259,27 @@ fn requested_controllers(resources: &ResourceConfig, required: bool) -> Vec<Cont
 }
 
 fn cgroup1_roots() -> Result<std::collections::HashMap<Controller, PathBuf>> {
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo")?;
-    Ok(parse_cgroup1_roots(&mountinfo))
+    let mountinfo = procfs::process::Process::myself()?.mountinfo()?;
+    Ok(parse_cgroup1_roots(&mountinfo.0))
 }
 
-fn parse_cgroup1_roots(mountinfo: &str) -> std::collections::HashMap<Controller, PathBuf> {
+fn parse_cgroup1_roots(
+    mountinfo: &[procfs::process::MountInfo],
+) -> std::collections::HashMap<Controller, PathBuf> {
     let mut roots = std::collections::HashMap::new();
-    for line in mountinfo.lines() {
-        let fields = line.split_whitespace().collect::<Vec<_>>();
-        let Some(separator) = fields.iter().position(|field| *field == "-") else {
-            continue;
-        };
-        if fields.get(separator + 1) != Some(&"cgroup") {
+    for mount in mountinfo {
+        if mount.fs_type != "cgroup" {
             continue;
         }
-        let Some(path) = fields.get(4).map(PathBuf::from) else {
-            continue;
-        };
-        let options = fields.get(separator + 3).copied().unwrap_or_default();
         for (name, controller) in [
             ("memory", Controller::Memory),
             ("cpu", Controller::Cpu),
             ("pids", Controller::Pids),
         ] {
-            if options.split(',').any(|option| option == name) {
-                roots.entry(controller).or_insert_with(|| path.clone());
+            if mount.super_options.contains_key(name) {
+                roots
+                    .entry(controller)
+                    .or_insert_with(|| mount.mount_point.clone());
             }
         }
     }
@@ -301,6 +296,7 @@ impl Drop for Cgroup {
 mod tests {
     use super::{Controller, cgroup_required, parse_cgroup1_roots, requested_controllers};
     use gnosis_config::ResourceConfig;
+    use procfs::process::MountInfo;
     use std::path::PathBuf;
 
     #[test]
@@ -322,7 +318,11 @@ mod tests {
     #[test]
     fn parses_controller_mounts_from_mountinfo() {
         let mountinfo = "29 23 0:26 / /sys/fs/cgroup/memory rw - cgroup cgroup rw,memory\n30 23 0:27 / /sys/fs/cgroup/cpu rw - cgroup cgroup rw,cpu,cpuacct\n31 23 0:28 / /sys/fs/cgroup/pids rw - cgroup cgroup rw,pids\n";
-        let roots = parse_cgroup1_roots(mountinfo);
+        let mountinfo = mountinfo
+            .lines()
+            .map(|line| MountInfo::from_line(line).unwrap())
+            .collect::<Vec<_>>();
+        let roots = parse_cgroup1_roots(&mountinfo);
         assert_eq!(
             roots.get(&Controller::Memory),
             Some(&PathBuf::from("/sys/fs/cgroup/memory"))

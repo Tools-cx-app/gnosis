@@ -102,9 +102,9 @@ fn check() -> Result<()> {
     );
     println!(
         "cgroup v1: {}",
-        std::fs::read_to_string("/proc/self/mountinfo").is_ok_and(|mountinfo| mountinfo
-            .lines()
-            .any(|line| { line.split_whitespace().any(|field| field == "cgroup") }))
+        procfs::process::Process::myself()
+            .and_then(|process| process.mountinfo())
+            .is_ok_and(|mountinfo| mountinfo.0.iter().any(|mount| mount.fs_type == "cgroup"))
     );
     println!("pidfd: {}", gnosis_runtime::pidfd_available());
     println!("ip command: {}", system_command_exists("ip"));

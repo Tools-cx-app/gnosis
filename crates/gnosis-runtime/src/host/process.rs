@@ -1,5 +1,4 @@
 use std::{
-    fs,
     os::fd::{AsFd, OwnedFd},
     time::{Duration, Instant},
 };
@@ -74,15 +73,7 @@ pub(crate) fn require_handle(pid: i32) -> Result<ProcessHandle> {
 }
 
 pub(crate) fn parent_pid(pid: i32) -> Result<i32> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
-    stat.rsplit_once(") ")
-        .context("invalid proc stat")?
-        .1
-        .split_whitespace()
-        .nth(1)
-        .context("proc stat is missing parent PID")?
-        .parse()
-        .context("invalid process parent PID")
+    Ok(procfs::process::Process::new(pid)?.stat()?.ppid)
 }
 
 #[cfg(test)]

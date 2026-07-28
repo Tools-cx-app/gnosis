@@ -10,6 +10,7 @@ clap.workspace = true
 gnosis-config = { path = "../gnosis-config" }
 gnosis-helper.workspace = true
 gnosis-runtime = { path = "../gnosis-runtime" }
+procfs.workspace = true
 
 [lints]
 workspace = true

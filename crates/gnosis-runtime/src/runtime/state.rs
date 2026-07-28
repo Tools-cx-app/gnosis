@@ -11,6 +11,7 @@ use fs2::FileExt;
 #[cfg(test)]
 use gnosis_helper::parent_pid as current_parent_pid;
 use gnosis_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, effective_uid};
+use procfs::process::{Process, all_processes};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -334,26 +335,16 @@ impl Runtime {
 fn collect_usage(state: &ContainerState) -> Result<(u64, usize)> {
     let mut memory_kb = 0;
     let mut processes = 0;
-    for entry in fs::read_dir("/proc")? {
-        let entry = entry?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|value| value.parse::<i32>().ok())
-        else {
+    for process in all_processes()? {
+        let Ok(process) = process else {
             continue;
         };
-        if namespace_inode(pid, "pid").ok() != Some(state.pid_namespace_inode) {
+        if process_namespace_inode(&process, "pid").ok() != Some(state.pid_namespace_inode) {
             continue;
         }
         processes += 1;
-        if let Ok(status) = fs::read_to_string(entry.path().join("status")) {
-            memory_kb += status
-                .lines()
-                .find_map(|line| line.strip_prefix("VmRSS:"))
-                .and_then(|value| value.split_whitespace().next())
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0);
+        if let Ok(status) = process.status() {
+            memory_kb += status.vmrss.unwrap_or(0);
         }
     }
     Ok((memory_kb, processes))
@@ -407,26 +398,24 @@ fn validate_monitor_identity(state: &ContainerState) -> bool {
 }
 
 pub(crate) fn host_boot_id() -> Result<String> {
-    Ok(fs::read_to_string("/proc/sys/kernel/random/boot_id")?
-        .trim()
-        .to_owned())
+    Ok(procfs::sys::kernel::random::boot_id()?)
 }
 
 pub(crate) fn process_start_time(pid: i32) -> Result<u64> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
-    stat.rsplit_once(") ")
-        .context("invalid proc stat")?
-        .1
-        .split_whitespace()
-        .nth(19)
-        .context("proc stat is missing starttime")?
-        .parse()
-        .context("invalid process starttime")
+    Ok(Process::new(pid)?.stat()?.starttime)
 }
 
 pub(crate) fn namespace_inode(pid: i32, namespace: &str) -> Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(fs::metadata(format!("/proc/{pid}/ns/{namespace}"))?.ino())
+    process_namespace_inode(&Process::new(pid)?, namespace)
+}
+
+fn process_namespace_inode(process: &Process, namespace: &str) -> Result<u64> {
+    process
+        .namespaces()?
+        .0
+        .get(std::ffi::OsStr::new(namespace))
+        .map(|value| value.identifier)
+        .with_context(|| format!("process {} has no {namespace} namespace", process.pid))
 }
 
 fn read_state(path: &Path) -> Result<ContainerState> {
@@ -463,19 +452,15 @@ fn remove_if_exists(path: &Path) -> Result<()> {
 }
 
 fn find_generation_init(expected: &ContainerState) -> Result<Option<i32>> {
-    for entry in fs::read_dir("/proc")? {
-        let entry = entry?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|value| value.parse::<i32>().ok())
-        else {
+    for process in all_processes()? {
+        let Ok(process) = process else {
             continue;
         };
-        if namespace_pid(pid).ok().flatten() != Some(1) {
+        let pid = process.pid;
+        if namespace_pid(&process).ok().flatten() != Some(1) {
             continue;
         }
-        let root = entry.path().join("root/run/gnosis");
+        let root = PathBuf::from(format!("/proc/{pid}/root/run/gnosis"));
         if fs::read_to_string(root.join("name")).ok().as_deref() != Some(&expected.name)
             || fs::read_to_string(root.join("uuid"))
                 .ok()
@@ -502,15 +487,11 @@ fn valid_state_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-fn namespace_pid(pid: i32) -> Result<Option<i32>> {
-    let status = fs::read_to_string(format!("/proc/{pid}/status"))?;
-    Ok(status.lines().find_map(|line| {
-        line.strip_prefix("NSpid:")?
-            .split_whitespace()
-            .next_back()?
-            .parse()
-            .ok()
-    }))
+fn namespace_pid(process: &Process) -> Result<Option<i32>> {
+    Ok(process
+        .status()?
+        .nspid
+        .and_then(|values| values.last().copied()))
 }
 
 fn ensure_trusted_directory(path: &Path) -> Result<()> {
@@ -569,7 +550,11 @@ mod tests {
     #[test]
     fn parses_namespace_and_parent_pids() {
         let pid = i32::try_from(std::process::id()).unwrap();
-        assert!(namespace_pid(pid).unwrap().is_some());
+        assert!(
+            namespace_pid(&Process::new(pid).unwrap())
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(parent_pid(pid).unwrap(), current_parent_pid());
     }
 
