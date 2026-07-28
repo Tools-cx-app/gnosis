@@ -227,6 +227,7 @@ dependencies = [
  "fs2",
  "gnosis-config",
  "gnosis-helper",
+ "is_executable",
  "serde",
  "serde_json",
  "tempfile",
@@ -254,6 +255,15 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown",
+]
+
+[[package]]
+name = "is_executable"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82cb6a9f675da968c63b6208c641b9dca58fc0133ae53375736b1767b0cab8bd"
+dependencies = [
+ "windows-sys",
 ]
 
 [[package]]

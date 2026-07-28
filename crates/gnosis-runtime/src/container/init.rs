@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use gnosis_config::Config;
 use gnosis_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, OPEN_NONBLOCK, Signal, realtime_min};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,16 @@ impl Init {
         Self {
             path: config.container.init.clone(),
         }
+    }
+
+    pub(crate) fn prepare(&self) -> Result<()> {
+        if !self.path.exists() {
+            bail!("init dosen't existed.");
+        }
+        if !is_executable::is_executable(&self.path) {
+            bail!("init isn't executable.")
+        }
+        Ok(())
     }
 
     pub(crate) fn detect(&self, rootfs: &Path) -> InitSystem {

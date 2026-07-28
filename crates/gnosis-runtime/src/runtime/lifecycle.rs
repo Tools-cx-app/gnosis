@@ -46,6 +46,7 @@ impl Runtime {
     pub fn start(&self, foreground_override: bool) -> Result<ContainerState> {
         Self::ensure_root()?;
         self.ensure_layout()?;
+        self.init.prepare()?;
         let lock = self.lock()?;
         ensure!(
             self.state()?.is_none(),
