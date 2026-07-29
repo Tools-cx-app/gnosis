@@ -307,8 +307,8 @@ fn owned_rule(name: &str, pid: i32, rule: &[&str]) -> Vec<String> {
 fn link_exists(name: &str) -> bool {
     command("ip")
         .args(["link", "show", name])
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 fn add_iptables(rule: &[&str]) -> Result<bool> {
@@ -318,8 +318,8 @@ fn add_iptables(rule: &[&str]) -> Result<bool> {
     }
     if command("iptables")
         .args(&check)
-        .status()
-        .is_ok_and(|status| status.success())
+        .output()
+        .is_ok_and(|output| output.status.success())
     {
         return Ok(false);
     }
