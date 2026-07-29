@@ -42,42 +42,70 @@ pub struct ContainerState {
 #[derive(Debug, Clone, Serialize)]
 pub struct ContainerInfo {
     pub name: String,
-    pub init_pid: i32,
-    pub monitor_pid: i32,
+    pub active: bool,
+    pub init_pid: Option<i32>,
+    pub monitor_pid: Option<i32>,
     pub rootfs: PathBuf,
-    pub uuid: Uuid,
-    pub init_system: InitSystem,
-    pub generation: u64,
-    pub uptime_seconds: u64,
-    pub memory_kb: u64,
-    pub processes: usize,
+    pub uuid: Option<Uuid>,
+    pub init_system: Option<InitSystem>,
+    pub generation: Option<u64>,
+    pub uptime_seconds: Option<u64>,
+    pub memory_kb: Option<u64>,
+    pub processes: Option<usize>,
 }
 
 impl std::fmt::Display for ContainerInfo {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(formatter, "{}", self.name)?;
-        writeln!(
-            formatter,
-            "{:>12}: active (running) for {}",
-            "Active",
-            format_duration(self.uptime_seconds)
-        )?;
-        writeln!(
-            formatter,
-            "{:>12}: {} ({})",
-            "Main PID", self.init_pid, self.init_system
-        )?;
-        writeln!(formatter, "{:>12}: {}", "Monitor PID", self.monitor_pid)?;
-        writeln!(formatter, "{:>12}: {}", "Tasks", self.processes)?;
-        writeln!(
+        if self.active {
+            writeln!(
+                formatter,
+                "{:>12}: active (running) for {}",
+                "Active",
+                format_duration(self.uptime_seconds.unwrap_or_default())
+            )?;
+            writeln!(
+                formatter,
+                "{:>12}: {} ({})",
+                "Main PID",
+                self.init_pid.unwrap_or_default(),
+                self.init_system.unwrap_or_default()
+            )?;
+            writeln!(
+                formatter,
+                "{:>12}: {}",
+                "Monitor PID",
+                self.monitor_pid.unwrap_or_default()
+            )?;
+            writeln!(
+                formatter,
+                "{:>12}: {}",
+                "Tasks",
+                self.processes.unwrap_or_default()
+            )?;
+            writeln!(
+                formatter,
+                "{:>12}: {}",
+                "Memory",
+                format_memory(self.memory_kb.unwrap_or_default())
+            )?;
+            writeln!(
+                formatter,
+                "{:>12}: {}",
+                "Generation",
+                self.generation.unwrap_or_default()
+            )?;
+        } else {
+            writeln!(formatter, "{:>12}: inactive (dead)", "Active")?;
+        }
+        writeln!(formatter, "{:>12}: {}", "Rootfs", self.rootfs.display())?;
+        write!(
             formatter,
             "{:>12}: {}",
-            "Memory",
-            format_memory(self.memory_kb)
-        )?;
-        writeln!(formatter, "{:>12}: {}", "Generation", self.generation)?;
-        writeln!(formatter, "{:>12}: {}", "Rootfs", self.rootfs.display())?;
-        write!(formatter, "{:>12}: {}", "UUID", self.uuid)
+            "UUID",
+            self.uuid
+                .map_or_else(|| "unassigned".to_owned(), |uuid| uuid.to_string())
+        )
     }
 }
 
@@ -86,22 +114,45 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns an error when state or procfs cannot be read, or the container is stopped.
+    /// Returns an error when state or procfs cannot be read.
     pub fn info(&self) -> Result<ContainerInfo> {
-        let state = self.require_state()?;
+        let Some(state) = self.state()? else {
+            let rootfs = self
+                .config
+                .container
+                .rootfs
+                .as_ref()
+                .or(self.config.container.rootfs_image.as_ref())
+                .context("container has no configured rootfs")?
+                .clone();
+            return Ok(ContainerInfo {
+                name: self.config.container.name.clone(),
+                active: false,
+                init_pid: None,
+                monitor_pid: None,
+                rootfs,
+                uuid: self.config.container.uuid,
+                init_system: None,
+                generation: None,
+                uptime_seconds: None,
+                memory_kb: None,
+                processes: None,
+            });
+        };
         let (memory_kb, processes) = collect_usage(&state)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         Ok(ContainerInfo {
             name: state.name,
-            init_pid: state.init_pid,
-            monitor_pid: state.monitor_pid,
+            active: true,
+            init_pid: Some(state.init_pid),
+            monitor_pid: Some(state.monitor_pid),
             rootfs: state.rootfs,
-            uuid: state.uuid,
-            init_system: state.init_system,
-            generation: state.generation,
-            uptime_seconds: now.saturating_sub(state.started_at_unix),
-            memory_kb,
-            processes,
+            uuid: Some(state.uuid),
+            init_system: Some(state.init_system),
+            generation: Some(state.generation),
+            uptime_seconds: Some(now.saturating_sub(state.started_at_unix)),
+            memory_kb: Some(memory_kb),
+            processes: Some(processes),
         })
     }
 
@@ -600,19 +651,57 @@ mod tests {
     fn displays_container_info() {
         let info = ContainerInfo {
             name: "test".to_owned(),
-            init_pid: 123,
-            monitor_pid: 122,
+            active: true,
+            init_pid: Some(123),
+            monitor_pid: Some(122),
             rootfs: PathBuf::from("/rootfs"),
-            uuid: Uuid::nil(),
-            init_system: crate::InitSystem::Systemd,
-            generation: 1,
-            uptime_seconds: 3_723,
-            memory_kb: 1_536,
-            processes: 4,
+            uuid: Some(Uuid::nil()),
+            init_system: Some(crate::InitSystem::Systemd),
+            generation: Some(1),
+            uptime_seconds: Some(3_723),
+            memory_kb: Some(1_536),
+            processes: Some(4),
         };
         assert_eq!(
             info.to_string(),
             "test\n      Active: active (running) for 1h 02m 03s\n    Main PID: 123 (systemd)\n Monitor PID: 122\n       Tasks: 4\n      Memory: 1.5 MiB\n  Generation: 1\n      Rootfs: /rootfs\n        UUID: 00000000-0000-0000-0000-000000000000"
         );
+    }
+
+    #[test]
+    fn displays_inactive_container_info() {
+        let info = ContainerInfo {
+            name: "test".to_owned(),
+            active: false,
+            init_pid: None,
+            monitor_pid: None,
+            rootfs: PathBuf::from("/rootfs"),
+            uuid: Some(Uuid::nil()),
+            init_system: None,
+            generation: None,
+            uptime_seconds: None,
+            memory_kb: None,
+            processes: None,
+        };
+        assert_eq!(
+            info.to_string(),
+            "test\n      Active: inactive (dead)\n      Rootfs: /rootfs\n        UUID: 00000000-0000-0000-0000-000000000000"
+        );
+    }
+
+    #[test]
+    fn reports_inactive_container_without_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = format!(
+            "[runtime]\nworkdir = {:?}\n\n[container]\nname = \"test\"\nrootfs = \"/rootfs\"\n",
+            directory.path()
+        );
+        let config: gnosis_config::Config = toml::from_str(&source).unwrap();
+        let info = Runtime::new(config).info().unwrap();
+
+        assert!(!info.active);
+        assert_eq!(info.name, "test");
+        assert_eq!(info.rootfs, PathBuf::from("/rootfs"));
+        assert_eq!(info.init_pid, None);
     }
 }
