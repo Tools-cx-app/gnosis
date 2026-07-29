@@ -11,7 +11,7 @@ gnosis-config = { path = "../gnosis-config" }
 gnosis-helper.workspace = true
 gnosis-runtime = { path = "../gnosis-runtime" }
 procfs.workspace = true
-which = "8.0.5"
+which.workspace = true
 
 [lints]
 workspace = true
