@@ -1,18 +1,19 @@
 use std::{
     io::Write,
-    os::fd::{AsFd, AsRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     sync::atomic::{AtomicI32, Ordering},
 };
 
 use anyhow::{Context, Result, bail};
 use gnosis_helper::{
-    ForkResult, POLL_HANGUP, POLL_IN, PollFd, PtyPair, Signal, SignalHandler, TerminalSettings,
-    WaitStatus, WindowSize, dup_stdio, effective_uid, fork, is_interrupted, is_io_error,
-    is_terminal, is_would_block, make_raw, open_pty, poll, pty_number, read, receive_fds, send_fds,
-    set_controlling_terminal, set_file_mode, set_gid, set_groups, set_signal_handler,
-    set_terminal_settings, set_terminal_size, set_uid, setsid, socket_pair, terminal_settings,
-    terminal_size, waitpid, write,
+    ForkResult, PtyPair, Signal, SignalHandler, TerminalSettings, WaitStatus, WindowSize,
+    dup_stdio, effective_uid, fork, is_interrupted, is_io_error, is_terminal, is_would_block,
+    make_raw, open_pty, pty_number, read, receive_fds, send_fds, set_controlling_terminal,
+    set_file_mode, set_gid, set_groups, set_signal_handler, set_terminal_settings,
+    set_terminal_size, set_uid, setsid, socket_pair, terminal_settings, terminal_size, waitpid,
+    write,
 };
+use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 
 use super::process::ProcessHandle;
 use crate::container::init::{self, InitSystem};
@@ -180,7 +181,6 @@ pub(crate) fn proxy(
     let mut child_status = None;
     let mut quiet_polls_after_exit = 0_u8;
     let mut buffer = [0_u8; 16 * 1024];
-
     loop {
         if let Some((target, _)) = shutdown_target {
             let signal = FORWARDED_SIGNAL.swap(0, Ordering::Relaxed);
@@ -192,18 +192,9 @@ pub(crate) fn proxy(
         }
         let mut read_output = false;
         sync_terminal_size(stdin.as_fd(), master.as_fd())?;
-        let stdin_events = if stdin_open { POLL_IN } else { 0 };
-        let mut fds = [
-            PollFd::new(master.as_fd(), POLL_IN),
-            PollFd::new(stdin.as_fd(), stdin_events),
-        ];
-        if let Err(error) = poll(&mut fds, 100)
-            && !is_interrupted(&error)
-        {
-            return Err(error).context("failed to poll terminal proxy");
-        }
+        let (output_ready, read_input) = poll_terminal(master.as_fd(), stdin.as_fd(), stdin_open)?;
 
-        if fds[0].revents() & (POLL_IN | POLL_HANGUP) != 0 {
+        if output_ready {
             match read(master, &mut buffer) {
                 Ok(0) => {
                     if let Some(status) = child_status {
@@ -226,7 +217,7 @@ pub(crate) fn proxy(
                 Err(error) => return Err(error).context("failed to read PTY output"),
             }
         }
-        if stdin_open && fds[1].revents() & (POLL_IN | POLL_HANGUP) != 0 {
+        if read_input {
             match read(&stdin, &mut buffer) {
                 Ok(0) => stdin_open = false,
                 Ok(length) => {
@@ -265,6 +256,37 @@ pub(crate) fn proxy(
             }
         }
     }
+}
+
+fn poll_terminal(
+    master: BorrowedFd<'_>,
+    stdin: BorrowedFd<'_>,
+    stdin_open: bool,
+) -> Result<(bool, bool)> {
+    let mut poll = Poll::new().context("failed to create terminal poller")?;
+    let master_fd = master.as_raw_fd();
+    poll.registry()
+        .register(&mut SourceFd(&master_fd), Token(0), Interest::READABLE)
+        .context("failed to register terminal output")?;
+    let stdin_fd = stdin.as_raw_fd();
+    if stdin_open {
+        poll.registry()
+            .register(&mut SourceFd(&stdin_fd), Token(1), Interest::READABLE)
+            .context("failed to register terminal input")?;
+    }
+    let mut events = Events::with_capacity(2);
+    if let Err(error) = poll.poll(&mut events, Some(std::time::Duration::from_millis(100)))
+        && !is_interrupted(&error)
+    {
+        return Err(error).context("failed to poll terminal proxy");
+    }
+    Ok(events
+        .iter()
+        .fold((false, false), |ready, event| match event.token() {
+            Token(0) => (true, ready.1),
+            Token(1) => (ready.0, true),
+            _ => ready,
+        }))
 }
 
 fn write_all(fd: &OwnedFd, mut bytes: &[u8]) -> Result<()> {

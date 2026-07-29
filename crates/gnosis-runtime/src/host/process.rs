@@ -1,12 +1,11 @@
 use std::{
-    os::fd::{AsFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, OwnedFd},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
-use gnosis_helper::{
-    POLL_HANGUP, POLL_IN, PollFd, Signal, is_interrupted, pidfd_open, pidfd_send_signal, poll,
-};
+use gnosis_helper::{Signal, is_interrupted, pidfd_open, pidfd_send_signal};
+use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ProcessId(i32);
@@ -45,17 +44,24 @@ impl ProcessHandle {
     }
 
     pub(crate) fn wait_for_exit(&self, timeout: Duration) -> Result<bool> {
+        let mut poll = Poll::new().context("failed to create pidfd poller")?;
+        poll.registry()
+            .register(
+                &mut SourceFd(&self.fd.as_raw_fd()),
+                Token(0),
+                Interest::READABLE,
+            )
+            .context("failed to register pidfd")?;
+        let mut events = Events::with_capacity(1);
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let milliseconds = remaining.as_millis().min(100) as i32;
-            let mut descriptors = [PollFd::new(self.fd.as_fd(), POLL_IN | POLL_HANGUP)];
-            match poll(&mut descriptors, milliseconds) {
-                Ok(_) => {}
+            match poll.poll(&mut events, Some(remaining.min(Duration::from_millis(100)))) {
+                Ok(()) => {}
                 Err(error) if is_interrupted(&error) => continue,
                 Err(error) => return Err(error).context("failed to poll pidfd"),
             }
-            if descriptors[0].revents() & (POLL_IN | POLL_HANGUP) != 0 {
+            if !events.is_empty() {
                 return Ok(true);
             }
             if Instant::now() >= deadline {

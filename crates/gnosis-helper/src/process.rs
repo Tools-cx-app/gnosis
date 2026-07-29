@@ -289,48 +289,6 @@ pub fn pidfd_send_signal(fd: BorrowedFd<'_>, signal: i32) -> io::Result<()> {
     .map(drop)
 }
 
-pub fn poll(fds: &mut [PollFd], timeout_ms: i32) -> io::Result<usize> {
-    let mut raw = fds
-        .iter()
-        .map(|fd| libc::pollfd {
-            fd: fd.fd.as_raw_fd(),
-            events: fd.events,
-            revents: 0,
-        })
-        .collect::<Vec<_>>();
-    // SAFETY: raw points to raw.len() initialized pollfd values.
-    let count =
-        cvt(unsafe { libc::poll(raw.as_mut_ptr(), raw.len() as libc::nfds_t, timeout_ms) })?;
-    for (fd, raw) in fds.iter_mut().zip(raw) {
-        fd.revents = raw.revents;
-    }
-    Ok(count as usize)
-}
-
-#[derive(Debug)]
-pub struct PollFd<'fd> {
-    fd: BorrowedFd<'fd>,
-    events: i16,
-    revents: i16,
-}
-
-impl<'fd> PollFd<'fd> {
-    pub fn new(fd: BorrowedFd<'fd>, events: i16) -> Self {
-        Self {
-            fd,
-            events,
-            revents: 0,
-        }
-    }
-
-    pub const fn revents(&self) -> i16 {
-        self.revents
-    }
-}
-
-pub const POLL_IN: i16 = libc::POLLIN;
-pub const POLL_HANGUP: i16 = libc::POLLHUP;
-
 #[derive(Clone, Copy)]
 pub enum SignalHandler {
     Default,
