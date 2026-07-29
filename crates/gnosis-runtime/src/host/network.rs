@@ -12,8 +12,11 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
 use gnosis_config::{Config, NetworkMode, Protocol};
-use gnosis_helper::{NamespaceFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, setns};
+use gnosis_helper::{NamespaceFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, current_pid, setns};
+use procfs::process::Process;
 use serde::{Deserialize, Serialize};
+
+use crate::runtime::state::{host_boot_id, process_start_time};
 
 #[cfg(target_os = "android")]
 const NETWORK_STATE_DIR: &str = "/dev/gnosis";
@@ -331,25 +334,62 @@ fn network_state_dir() -> Result<PathBuf> {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct NatLease {
-    users: u64,
+    #[serde(default)]
+    owners: Vec<NatLeaseOwner>,
     restore_disabled: bool,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+struct NatLeaseOwner {
+    host_boot_id: String,
+    pid: i32,
+    start_time: u64,
+}
+
+impl NatLeaseOwner {
+    fn current() -> Result<Self> {
+        let pid = current_pid();
+        Ok(Self {
+            host_boot_id: host_boot_id()?,
+            pid,
+            start_time: process_start_time(pid)?,
+        })
+    }
+
+    fn is_live(&self, current_boot_id: &str) -> bool {
+        self.host_boot_id == current_boot_id
+            && Process::new(self.pid).is_ok_and(|process| {
+                process
+                    .stat()
+                    .is_ok_and(|stat| stat.starttime == self.start_time && stat.state != 'Z')
+            })
+    }
 }
 
 fn acquire_nat_lease() -> Result<()> {
     let path = network_state_dir()?.join("network-state.json");
     let mut lease = read_nat_lease(&path);
-    if lease.users == 0 {
+    let owner = NatLeaseOwner::current()?;
+    lease
+        .owners
+        .retain(|candidate| candidate.is_live(&owner.host_boot_id));
+    if lease.owners.is_empty() && !path.exists() {
         lease.restore_disabled = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")?.trim() == "0";
     }
-    lease.users += 1;
+    if !lease.owners.contains(&owner) {
+        lease.owners.push(owner);
+    }
     write_nat_lease(&path, &lease)
 }
 
 fn release_nat_lease() -> Result<()> {
     let path = network_state_dir()?.join("network-state.json");
     let mut lease = read_nat_lease(&path);
-    lease.users = lease.users.saturating_sub(1);
-    if lease.users == 0 {
+    let owner = NatLeaseOwner::current()?;
+    lease
+        .owners
+        .retain(|candidate| candidate != &owner && candidate.is_live(&owner.host_boot_id));
+    if lease.owners.is_empty() {
         if lease.restore_disabled {
             fs::write("/proc/sys/net/ipv4/ip_forward", "0")?;
         }
@@ -488,4 +528,29 @@ fn masked_network(address: std::net::Ipv4Addr, prefix: u8) -> std::net::Ipv4Addr
         u32::MAX << (32 - prefix)
     };
     std::net::Ipv4Addr::from(u32::from(address) & mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_stale_nat_lease_owner_identity() {
+        let owner = NatLeaseOwner::current().unwrap();
+        assert!(owner.is_live(&owner.host_boot_id));
+
+        let stale_owner = NatLeaseOwner {
+            start_time: owner.start_time.wrapping_add(1),
+            ..owner
+        };
+        assert!(!stale_owner.is_live(&stale_owner.host_boot_id));
+    }
+
+    #[test]
+    fn preserves_restore_state_from_legacy_nat_lease() {
+        let lease: NatLease =
+            serde_json::from_str(r#"{"users":2,"restore_disabled":true}"#).unwrap();
+        assert!(lease.owners.is_empty());
+        assert!(lease.restore_disabled);
+    }
 }
