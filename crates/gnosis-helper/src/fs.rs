@@ -5,6 +5,8 @@ use std::{
     path::Path,
 };
 
+use crate::syscall::{cvt, path_cstring};
+
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct MountFlags: libc::c_ulong {
@@ -58,13 +60,14 @@ pub fn mount(
                 .map_or(std::ptr::null(), |value| value.as_ptr().cast()),
         )
     };
-    cvt(result)
+    cvt(result).map(drop)
 }
 
 pub fn unmount(path: &Path, detach: bool) -> io::Result<()> {
     let path = path_cstring(path)?;
     // SAFETY: path is NUL-terminated and flags is a valid umount2 bitmask.
     cvt(unsafe { libc::umount2(path.as_ptr(), if detach { libc::MNT_DETACH } else { 0 }) })
+        .map(drop)
 }
 
 pub fn filesystem_type(path: &Path) -> io::Result<i64> {
@@ -150,24 +153,12 @@ pub fn configure_loop_device(
 
 pub fn clear_loop_device(fd: BorrowedFd<'_>) -> io::Result<()> {
     // SAFETY: LOOP_CLR_FD takes no variadic argument and fd remains live.
-    cvt(unsafe { libc::ioctl(fd.as_raw_fd(), LOOP_CLR_FD) })
+    cvt(unsafe { libc::ioctl(fd.as_raw_fd(), LOOP_CLR_FD) }).map(drop)
 }
 
 pub fn set_file_mode(fd: BorrowedFd<'_>, mode: u32) -> io::Result<()> {
     let mode = libc::mode_t::try_from(mode)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file mode exceeds mode_t"))?;
     // SAFETY: fd remains live and mode has the target's exact mode_t type.
-    cvt(unsafe { libc::fchmod(fd.as_raw_fd(), mode) })
-}
-
-fn path_cstring(path: &Path) -> io::Result<CString> {
-    CString::new(path.as_os_str().as_encoded_bytes()).map_err(io::Error::other)
-}
-
-fn cvt(result: i32) -> io::Result<()> {
-    if result == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    cvt(unsafe { libc::fchmod(fd.as_raw_fd(), mode) }).map(drop)
 }

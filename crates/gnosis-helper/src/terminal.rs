@@ -3,6 +3,8 @@ use std::{
     os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
 };
 
+use crate::syscall::cvt;
+
 #[cfg(target_os = "android")]
 use std::{
     fs::OpenOptions,
@@ -43,9 +45,7 @@ pub fn open_pty(size: Option<&WindowSize>) -> io::Result<PtyPair> {
             raw_size.as_ref().map_or(std::ptr::null(), |value| value),
         )
     };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
-    }
+    cvt(result)?;
     // SAFETY: openpty returned two newly owned descriptors.
     Ok(unsafe {
         PtyPair {
@@ -104,9 +104,7 @@ pub fn socket_pair() -> io::Result<(OwnedFd, OwnedFd)> {
             fds.as_mut_ptr(),
         )
     };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
-    }
+    cvt(result)?;
     // SAFETY: socketpair returned two newly owned descriptors.
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
@@ -246,9 +244,7 @@ impl Clone for TerminalSettings {
 pub fn terminal_settings(fd: BorrowedFd<'_>) -> io::Result<TerminalSettings> {
     let mut settings = std::mem::MaybeUninit::uninit();
     // SAFETY: settings points to writable termios storage.
-    if unsafe { libc::tcgetattr(fd.as_raw_fd(), settings.as_mut_ptr()) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
+    cvt(unsafe { libc::tcgetattr(fd.as_raw_fd(), settings.as_mut_ptr()) })?;
     // SAFETY: tcgetattr initialized settings.
     Ok(TerminalSettings(unsafe { settings.assume_init() }))
 }
@@ -260,11 +256,7 @@ pub fn make_raw(settings: &mut TerminalSettings) {
 
 pub fn set_terminal_settings(fd: BorrowedFd<'_>, settings: &TerminalSettings) -> io::Result<()> {
     // SAFETY: fd is live and settings is initialized.
-    if unsafe { libc::tcsetattr(fd.as_raw_fd(), libc::TCSANOW, &settings.0) } == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    cvt(unsafe { libc::tcsetattr(fd.as_raw_fd(), libc::TCSANOW, &settings.0) }).map(drop)
 }
 
 pub fn terminal_size(fd: BorrowedFd<'_>) -> io::Result<WindowSize> {
@@ -275,9 +267,7 @@ pub fn terminal_size(fd: BorrowedFd<'_>) -> io::Result<WindowSize> {
         ws_ypixel: 0,
     };
     // SAFETY: size points to writable winsize storage.
-    if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut size) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
+    cvt(unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ, &mut size) })?;
     Ok(WindowSize {
         rows: size.ws_row,
         columns: size.ws_col,
@@ -294,20 +284,12 @@ pub fn set_terminal_size(fd: BorrowedFd<'_>, size: &WindowSize) -> io::Result<()
         ws_ypixel: size.y_pixels,
     };
     // SAFETY: size points to a readable winsize value.
-    if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCSWINSZ, &size) } == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    cvt(unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCSWINSZ, &size) }).map(drop)
 }
 
 pub fn set_controlling_terminal(fd: BorrowedFd<'_>) -> io::Result<()> {
     // SAFETY: TIOCSCTTY takes an integer argument and fd remains live.
-    if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCSCTTY, 0) } == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    cvt(unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCSCTTY, 0) }).map(drop)
 }
 
 pub fn pty_number(fd: BorrowedFd<'_>) -> io::Result<u32> {
@@ -317,14 +299,32 @@ pub fn pty_number(fd: BorrowedFd<'_>) -> io::Result<u32> {
     #[cfg(not(target_os = "android"))]
     const REQUEST: libc::Ioctl = libc::TIOCGPTN;
     // SAFETY: number points to writable u32 storage.
-    if unsafe { libc::ioctl(fd.as_raw_fd(), REQUEST, &mut number) } == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(number)
-    }
+    cvt(unsafe { libc::ioctl(fd.as_raw_fd(), REQUEST, &mut number) })?;
+    Ok(number)
 }
 
 fn cmsg_space(count: usize) -> usize {
     // SAFETY: the requested payload is a bounded count of RawFd values.
     unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32 * count as u32) as usize }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::{AsFd, AsRawFd};
+
+    use super::{receive_fds, send_fds, socket_pair};
+
+    #[test]
+    fn transfers_descriptors_with_close_on_exec() {
+        let (sender, receiver) = socket_pair().unwrap();
+        let (transferred, _peer) = socket_pair().unwrap();
+
+        send_fds(sender.as_fd(), &[transferred.as_raw_fd()]).unwrap();
+        let descriptors = receive_fds(receiver.as_fd(), 1).unwrap();
+
+        // SAFETY: the received descriptor remains owned and live for the call.
+        let flags = unsafe { libc::fcntl(descriptors[0].as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags, -1);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
 }

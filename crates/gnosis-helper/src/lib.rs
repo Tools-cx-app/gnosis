@@ -15,6 +15,7 @@
 mod fs;
 mod process;
 mod security;
+mod syscall;
 mod terminal;
 
 pub use fs::*;

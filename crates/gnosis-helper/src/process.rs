@@ -5,6 +5,8 @@ use std::{
     path::Path,
 };
 
+use crate::syscall::{cvt, cvt_long, cvt_ssize, path_cstring};
+
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     pub struct NamespaceFlags: i32 {
@@ -366,32 +368,4 @@ pub fn is_io_error(error: &io::Error) -> bool {
 
 pub fn realtime_min() -> i32 {
     libc::SIGRTMIN()
-}
-
-fn path_cstring(path: &Path) -> io::Result<CString> {
-    CString::new(path.as_os_str().as_encoded_bytes()).map_err(io::Error::other)
-}
-
-fn cvt(result: i32) -> io::Result<i32> {
-    if result == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(result)
-    }
-}
-
-fn cvt_long(result: libc::c_long) -> io::Result<libc::c_long> {
-    if result == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(result)
-    }
-}
-
-fn cvt_ssize(result: libc::ssize_t) -> io::Result<usize> {
-    if result == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(result as usize)
-    }
 }
