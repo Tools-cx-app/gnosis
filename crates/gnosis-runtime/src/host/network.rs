@@ -1,22 +1,29 @@
 use std::{
     fmt::Write as _,
     fs::{self, File, OpenOptions},
-    os::{fd::AsFd, unix::fs::OpenOptionsExt},
-    path::Path,
+    os::{
+        fd::AsFd,
+        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    },
+    path::{Path, PathBuf},
     process::Command,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
 use gnosis_config::{Config, NetworkMode, Protocol};
 use gnosis_helper::{NamespaceFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, setns};
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_os = "android")]
+const NETWORK_STATE_DIR: &str = "/dev/gnosis";
+#[cfg(not(target_os = "android"))]
+const NETWORK_STATE_DIR: &str = "/run/gnosis";
+
 pub struct Network {
     host_link: Option<String>,
     peer_link: Option<String>,
     rules: Vec<Vec<String>>,
-    workdir: Option<std::path::PathBuf>,
     nat_lease: bool,
 }
 
@@ -33,8 +40,7 @@ impl Network {
             return Ok(network);
         }
 
-        let _lock = network_lock(&config.runtime.workdir)?;
-        network.workdir = Some(config.runtime.workdir.clone());
+        let _lock = network_lock()?;
         let host_link = format!("dsv{init_pid}");
         let peer_link = format!("dsp{init_pid}");
         network.host_link = Some(host_link.clone());
@@ -69,7 +75,7 @@ impl Network {
             )?;
 
             if config.container.network == NetworkMode::Nat {
-                acquire_nat_lease(&config.runtime.workdir)?;
+                acquire_nat_lease()?;
                 network.nat_lease = true;
                 fs::write("/proc/sys/net/ipv4/ip_forward", "1")?;
                 let subnet = format!(
@@ -243,7 +249,6 @@ impl Network {
             host_link: None,
             peer_link: None,
             rules: Vec::new(),
-            workdir: None,
             nat_lease: false,
         }
     }
@@ -257,10 +262,7 @@ impl Network {
     }
 
     fn cleanup_resources(&mut self) {
-        let _lock = self
-            .workdir
-            .as_deref()
-            .and_then(|workdir| network_lock(workdir).ok());
+        let _lock = network_lock().ok();
         self.cleanup_resources_locked();
     }
 
@@ -278,12 +280,9 @@ impl Network {
         }
         self.peer_link = None;
         if self.nat_lease {
-            if let Some(workdir) = &self.workdir {
-                let _ = release_nat_lease(workdir);
-            }
+            let _ = release_nat_lease();
             self.nat_lease = false;
         }
-        self.workdir = None;
     }
 }
 
@@ -293,8 +292,8 @@ impl Drop for Network {
     }
 }
 
-fn network_lock(workdir: &Path) -> Result<File> {
-    fs::create_dir_all(workdir)?;
+fn network_lock() -> Result<File> {
+    let state_dir = network_state_dir()?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -302,9 +301,32 @@ fn network_lock(workdir: &Path) -> Result<File> {
         .truncate(false)
         .mode(0o600)
         .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
-        .open(workdir.join("network.lock"))?;
+        .open(state_dir.join("network.lock"))?;
     file.lock_exclusive()?;
     Ok(file)
+}
+
+fn network_state_dir() -> Result<PathBuf> {
+    let path = PathBuf::from(NETWORK_STATE_DIR);
+    if !path.exists() {
+        fs::create_dir_all(&path)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+    }
+    let metadata = fs::symlink_metadata(&path)?;
+    ensure!(metadata.is_dir(), "network state path is not a directory");
+    ensure!(
+        !metadata.file_type().is_symlink(),
+        "network state directory must not be a symlink"
+    );
+    ensure!(
+        metadata.uid() == 0,
+        "network state directory must be owned by root"
+    );
+    ensure!(
+        metadata.mode() & 0o022 == 0,
+        "network state directory must not be group or world writable"
+    );
+    Ok(path)
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -313,8 +335,8 @@ struct NatLease {
     restore_disabled: bool,
 }
 
-fn acquire_nat_lease(workdir: &Path) -> Result<()> {
-    let path = workdir.join("network-state.json");
+fn acquire_nat_lease() -> Result<()> {
+    let path = network_state_dir()?.join("network-state.json");
     let mut lease = read_nat_lease(&path);
     if lease.users == 0 {
         lease.restore_disabled = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")?.trim() == "0";
@@ -323,8 +345,8 @@ fn acquire_nat_lease(workdir: &Path) -> Result<()> {
     write_nat_lease(&path, &lease)
 }
 
-fn release_nat_lease(workdir: &Path) -> Result<()> {
-    let path = workdir.join("network-state.json");
+fn release_nat_lease() -> Result<()> {
+    let path = network_state_dir()?.join("network-state.json");
     let mut lease = read_nat_lease(&path);
     lease.users = lease.users.saturating_sub(1);
     if lease.users == 0 {
