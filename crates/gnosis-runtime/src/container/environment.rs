@@ -45,13 +45,22 @@ pub(crate) fn session_environment(
     configured: &BTreeMap<String, String>,
     android: &AndroidConfig,
 ) -> Result<Vec<CString>> {
-    let mut configured = configured.clone();
-    match fs::read_to_string("/etc/environment") {
-        Ok(source) => configured.extend(gnosis_config::parse_environment(&source)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    let source = match fs::read_to_string("/etc/environment") {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error).context("failed to read /etc/environment"),
-    }
-    container_environment(&configured, android)
+    };
+    session_environment_from(&source, configured, android)
+}
+
+fn session_environment_from(
+    source: &str,
+    configured: &BTreeMap<String, String>,
+    android: &AndroidConfig,
+) -> Result<Vec<CString>> {
+    let mut environment = gnosis_config::parse_environment(source)?;
+    environment.extend(configured.clone());
+    container_environment(&environment, android)
 }
 
 pub(crate) fn write_profile_environment(
@@ -106,6 +115,8 @@ fn variable(key: &str, value: &str) -> Result<CString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gnosis_config::Config;
+    use tempfile::tempdir;
 
     #[test]
     fn applies_defaults_and_user_overrides() {
@@ -139,5 +150,48 @@ mod tests {
         configured.insert("VALUE".to_owned(), "it's safe".to_owned());
         let rendered = render_profile_environment(&configured);
         assert_eq!(rendered, "export VALUE='it'\\''s safe'\n");
+    }
+
+    #[test]
+    fn configured_environment_overrides_session_environment() {
+        let configured = BTreeMap::from([("LANG".to_owned(), "configured".to_owned())]);
+        let environment = session_environment_from(
+            "LANG=image\nIMAGE_ONLY=yes\n",
+            &configured,
+            &AndroidConfig::default(),
+        )
+        .unwrap();
+        let environment = environment
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert!(environment.contains(&"LANG=configured"));
+        assert!(environment.contains(&"IMAGE_ONLY=yes"));
+        assert!(!environment.contains(&"LANG=image"));
+    }
+
+    #[test]
+    fn injects_environment_key_from_config() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
+        fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
+        let path = dir.path().join("gnosis.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir='state'\n[container]\nname='test'\nrootfs='rootfs'\n[container.environment]\nMY_KEY='my-value'\n",
+        )
+        .unwrap();
+
+        let config = Config::load(&path).unwrap();
+        let environment =
+            container_environment(&config.container.environment, &config.container.android)
+                .unwrap();
+
+        assert!(
+            environment
+                .iter()
+                .any(|value| value.to_bytes() == b"MY_KEY=my-value")
+        );
     }
 }
