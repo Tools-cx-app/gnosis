@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis-helper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bitflags",
  "libc",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "gnosis-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "fs2",

@@ -1,14 +1,14 @@
 [workspace]
 members = [
-    "crates/gnosis-cli",
-    "crates/gnosis-config",
-    "crates/gnosis-helper",
-    "crates/gnosis-runtime",
+  "crates/gnosis-cli",
+  "crates/gnosis-config",
+  "crates/gnosis-helper",
+  "crates/gnosis-runtime",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
