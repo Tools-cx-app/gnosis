@@ -9,6 +9,7 @@
 ## Code ownership
 
 - Put raw syscalls, libc/FFI details, file-descriptor primitives, and Linux/Android or architecture-specific wrappers in `gnosis-helper`. Keep policy, lifecycle decisions, and user-facing output out of this crate.
+- Changes to `gnosis-helper` must preserve the target kernel ABI: use ABI-correct libc types, constants, structure layouts, and calling conventions under the appropriate target/architecture gates. Keep `unsafe` blocks minimal, document their safety invariants, validate pointers, lengths, ownership, and return values at the safe wrapper boundary, and do not expose an API as safe unless callers cannot violate those invariants.
 - Put TOML schema, parsing, path resolution, defaults, and configuration validation in `gnosis-config`. It must not depend on runtime or host state.
 - Put container lifecycle and isolation policy in `gnosis-runtime`: orchestration/state/exec in `runtime/`, host-owned resources in `host/`, and behavior applied inside the container in `container/`. Call `gnosis-helper` rather than duplicating unsafe syscall code.
 - Put argument parsing, command dispatch, capability-report formatting, and other terminal-facing presentation in `gnosis-cli`. Keep reusable runtime behavior out of the CLI.
