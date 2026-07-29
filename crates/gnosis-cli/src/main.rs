@@ -107,8 +107,8 @@ fn check() -> Result<()> {
             .is_ok_and(|mountinfo| mountinfo.0.iter().any(|mount| mount.fs_type == "cgroup"))
     );
     println!("pidfd: {}", gnosis_runtime::pidfd_available());
-    println!("ip command: {}", system_command_exists("ip"));
-    println!("iptables command: {}", system_command_exists("iptables"));
+    println!("ip command: {}", which::which("ip")?.display());
+    println!("iptables command: {}", which::which("iptables")?.display());
     Ok(())
 }
 
@@ -129,10 +129,4 @@ fn probe_namespace(flag: NamespaceFlags, name: &str) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn system_command_exists(program: &str) -> bool {
-    ["/system/bin", "/usr/sbin", "/sbin", "/usr/bin", "/bin"]
-        .into_iter()
-        .any(|directory| std::path::Path::new(directory).join(program).is_file())
 }
