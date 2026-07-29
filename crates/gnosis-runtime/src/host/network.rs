@@ -1,33 +1,20 @@
 use std::{
     fmt::Write as _,
     fs::{self, File, OpenOptions},
-    os::{
-        fd::AsFd,
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
-    },
-    path::{Path, PathBuf},
+    os::fd::AsFd,
+    path::Path,
     process::Command,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use gnosis_config::{Config, NetworkMode, Protocol};
-use gnosis_helper::{NamespaceFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, current_pid, setns};
-use procfs::process::Process;
-use serde::{Deserialize, Serialize};
-
-use crate::runtime::state::{host_boot_id, process_start_time};
-
-#[cfg(target_os = "android")]
-const NETWORK_STATE_DIR: &str = "/dev/gnosis";
-#[cfg(not(target_os = "android"))]
-const NETWORK_STATE_DIR: &str = "/run/gnosis";
+use gnosis_helper::{NamespaceFlags, setns};
 
 pub struct Network {
     host_link: Option<String>,
     peer_link: Option<String>,
     rules: Vec<Vec<String>>,
-    nat_lease: bool,
 }
 
 impl Network {
@@ -78,8 +65,6 @@ impl Network {
             )?;
 
             if config.container.network == NetworkMode::Nat {
-                acquire_nat_lease()?;
-                network.nat_lease = true;
                 fs::write("/proc/sys/net/ipv4/ip_forward", "1")?;
                 let subnet = format!(
                     "{}/{}",
@@ -252,7 +237,6 @@ impl Network {
             host_link: None,
             peer_link: None,
             rules: Vec::new(),
-            nat_lease: false,
         }
     }
 
@@ -282,10 +266,6 @@ impl Network {
             let _ = run("ip", &["link", "delete", &link]);
         }
         self.peer_link = None;
-        if self.nat_lease {
-            let _ = release_nat_lease();
-            self.nat_lease = false;
-        }
     }
 }
 
@@ -296,125 +276,11 @@ impl Drop for Network {
 }
 
 fn network_lock() -> Result<File> {
-    let state_dir = network_state_dir()?;
     let file = OpenOptions::new()
         .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
-        .open(state_dir.join("network.lock"))?;
+        .open("/proc/sys/net/ipv4/ip_forward")?;
     file.lock_exclusive()?;
     Ok(file)
-}
-
-fn network_state_dir() -> Result<PathBuf> {
-    let path = PathBuf::from(NETWORK_STATE_DIR);
-    if !path.exists() {
-        fs::create_dir_all(&path)?;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-    }
-    let metadata = fs::symlink_metadata(&path)?;
-    ensure!(metadata.is_dir(), "network state path is not a directory");
-    ensure!(
-        !metadata.file_type().is_symlink(),
-        "network state directory must not be a symlink"
-    );
-    ensure!(
-        metadata.uid() == 0,
-        "network state directory must be owned by root"
-    );
-    ensure!(
-        metadata.mode() & 0o022 == 0,
-        "network state directory must not be group or world writable"
-    );
-    Ok(path)
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct NatLease {
-    #[serde(default)]
-    owners: Vec<NatLeaseOwner>,
-    restore_disabled: bool,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-struct NatLeaseOwner {
-    host_boot_id: String,
-    pid: i32,
-    start_time: u64,
-}
-
-impl NatLeaseOwner {
-    fn current() -> Result<Self> {
-        let pid = current_pid();
-        Ok(Self {
-            host_boot_id: host_boot_id()?,
-            pid,
-            start_time: process_start_time(pid)?,
-        })
-    }
-
-    fn is_live(&self, current_boot_id: &str) -> bool {
-        self.host_boot_id == current_boot_id
-            && Process::new(self.pid).is_ok_and(|process| {
-                process
-                    .stat()
-                    .is_ok_and(|stat| stat.starttime == self.start_time && stat.state != 'Z')
-            })
-    }
-}
-
-fn acquire_nat_lease() -> Result<()> {
-    let path = network_state_dir()?.join("network-state.json");
-    let mut lease = read_nat_lease(&path);
-    let owner = NatLeaseOwner::current()?;
-    lease
-        .owners
-        .retain(|candidate| candidate.is_live(&owner.host_boot_id));
-    if lease.owners.is_empty() && !path.exists() {
-        lease.restore_disabled = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")?.trim() == "0";
-    }
-    if !lease.owners.contains(&owner) {
-        lease.owners.push(owner);
-    }
-    write_nat_lease(&path, &lease)
-}
-
-fn release_nat_lease() -> Result<()> {
-    let path = network_state_dir()?.join("network-state.json");
-    let mut lease = read_nat_lease(&path);
-    let owner = NatLeaseOwner::current()?;
-    lease
-        .owners
-        .retain(|candidate| candidate != &owner && candidate.is_live(&owner.host_boot_id));
-    if lease.owners.is_empty() {
-        if lease.restore_disabled {
-            fs::write("/proc/sys/net/ipv4/ip_forward", "0")?;
-        }
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
-        return Ok(());
-    }
-    write_nat_lease(&path, &lease)
-}
-
-fn read_nat_lease(path: &Path) -> NatLease {
-    fs::read(path)
-        .ok()
-        .and_then(|source| serde_json::from_slice(&source).ok())
-        .unwrap_or_default()
-}
-
-fn write_nat_lease(path: &Path, lease: &NatLease) -> Result<()> {
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec(lease)?)?;
-    fs::rename(temporary, path)?;
-    Ok(())
 }
 
 fn owned_rule(name: &str, pid: i32, rule: &[&str]) -> Vec<String> {
@@ -528,29 +394,4 @@ fn masked_network(address: std::net::Ipv4Addr, prefix: u8) -> std::net::Ipv4Addr
         u32::MAX << (32 - prefix)
     };
     std::net::Ipv4Addr::from(u32::from(address) & mask)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_stale_nat_lease_owner_identity() {
-        let owner = NatLeaseOwner::current().unwrap();
-        assert!(owner.is_live(&owner.host_boot_id));
-
-        let stale_owner = NatLeaseOwner {
-            start_time: owner.start_time.wrapping_add(1),
-            ..owner
-        };
-        assert!(!stale_owner.is_live(&stale_owner.host_boot_id));
-    }
-
-    #[test]
-    fn preserves_restore_state_from_legacy_nat_lease() {
-        let lease: NatLease =
-            serde_json::from_str(r#"{"users":2,"restore_disabled":true}"#).unwrap();
-        assert!(lease.owners.is_empty());
-        assert!(lease.restore_disabled);
-    }
 }
