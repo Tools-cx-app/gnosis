@@ -214,6 +214,11 @@ impl Network {
         if let Some(parent) = resolv.parent() {
             fs::create_dir_all(parent)?;
         }
+        if fs::symlink_metadata(&resolv).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            && !resolv.try_exists()?
+        {
+            fs::remove_file(&resolv)?;
+        }
         let content =
             config
                 .container
@@ -224,7 +229,8 @@ impl Network {
                     let _ = writeln!(content, "nameserver {dns}");
                     content
                 });
-        fs::write(resolv, content)?;
+        fs::write(&resolv, content)
+            .with_context(|| format!("failed to write DNS configuration {}", resolv.display()))?;
         Ok(())
     }
 
@@ -394,4 +400,36 @@ fn masked_network(address: std::net::Ipv4Addr, prefix: u8) -> std::net::Ipv4Addr
         u32::MAX << (32 - prefix)
     };
     std::net::Ipv4Addr::from(u32::from(address) & mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    #[test]
+    fn replaces_dangling_resolv_conf_symlink() {
+        let rootfs = tempfile::tempdir().unwrap();
+        fs::create_dir(rootfs.path().join("etc")).unwrap();
+        symlink(
+            "../run/systemd/resolve/stub-resolv.conf",
+            rootfs.path().join("etc/resolv.conf"),
+        )
+        .unwrap();
+        let config = test_config();
+
+        Network::write_dns(&config, rootfs.path()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(rootfs.path().join("etc/resolv.conf")).unwrap(),
+            "nameserver 1.1.1.1\n"
+        );
+    }
+
+    fn test_config() -> Config {
+        toml::from_str(
+            "[runtime]\nworkdir = '/tmp/gnosis'\n\n[container]\nname = 'test'\nrootfs = '/tmp'\n\n[container.network_options]\ndns = ['1.1.1.1']\n",
+        )
+        .unwrap()
+    }
 }
