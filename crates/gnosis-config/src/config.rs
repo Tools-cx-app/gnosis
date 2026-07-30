@@ -329,6 +329,7 @@ pub(crate) fn safe_container_path(path: &Path) -> bool {
             .components()
             .all(|component| !matches!(component, Component::ParentDir))
         && path != Path::new("/")
+        && !path.starts_with("/.old_root")
 }
 
 pub(crate) fn valid_name(name: &str) -> bool {

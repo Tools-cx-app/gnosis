@@ -42,6 +42,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_old_root_bind_targets() {
+        assert!(!safe_container_path(Path::new("/.old_root")));
+        assert!(!safe_container_path(Path::new("/.old_root/etc")));
+        assert!(safe_container_path(Path::new("/.old_rootfs")));
+    }
+
+    #[test]
     fn persists_stable_uuid_when_missing() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
