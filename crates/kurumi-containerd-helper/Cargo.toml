@@ -1,0 +1,12 @@
+[package]
+name = "kurumi-containerd-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+libc.workspace = true
+
+[lints]
+workspace = true

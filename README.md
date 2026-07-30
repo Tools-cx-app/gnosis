@@ -1,14 +1,17 @@
-# gnosis
+# KurumiContainerd
 
-gnosis is a privileged Linux container runtime and command-line tool written
+KurumiContainerd is a privileged Linux container runtime and command-line tool written
 in Rust. It manages lightweight system containers with Linux namespaces,
 mounts, cgroups, networking, and a persistent TOML configuration.
+
+The name comes from **Kurumi**, the Japanese romanization of 胡桃
+(“walnut”), combined with **containerd** to reflect the project's purpose.
 
 This repository contains the CLI and runtime only. It does not contain an
 Android application. The runtime can still expose optional Android host
 resources when compiled for and executed on Android.
 
-> gnosis is a container runtime, not a security sandbox. Run only root
+> KurumiContainerd is a container runtime, not a security sandbox. Run only root
 > filesystems and commands you trust.
 
 ## Features
@@ -36,7 +39,7 @@ resources when compiled for and executed on Android.
 Run the host capability checks before starting a container:
 
 ```bash
-sudo cargo run --release -p gnosis -- check
+sudo cargo run --release -p kurumi-containerd -- check
 ```
 
 ## Build
@@ -45,23 +48,23 @@ sudo cargo run --release -p gnosis -- check
 cargo build --release
 ```
 
-The binary is written to `target/release/gnosis`.
+The binary is written to `target/release/kurumi-containerd`.
 
 ## Quick Start
 
 Create a configuration from the example and update the rootfs path:
 
 ```bash
-cp gnosis.example.toml gnosis.toml
-$EDITOR gnosis.toml
-sudo ./target/release/gnosis --config gnosis.toml start
-sudo ./target/release/gnosis --config gnosis.toml info
-sudo ./target/release/gnosis --config gnosis.toml enter
-sudo ./target/release/gnosis --config gnosis.toml stop
+cp kurumi-containerd.example.toml kurumi-containerd.toml
+$EDITOR kurumi-containerd.toml
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml start
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml info
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml enter
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml stop
 ```
 
-`--config` defaults to `gnosis.toml` and can also be set with
-`GNOSIS_CONFIG`. Relative host paths are resolved from the configuration
+`--config` defaults to `kurumi-containerd.toml` and can also be set with
+`KURUMI_CONTAINERD_CONFIG`. Relative host paths are resolved from the configuration
 file, not from the current working directory.
 
 ## Commands
@@ -88,5 +91,5 @@ check                   Probe required host capabilities
 
 ## License
 
-gnosis is licensed under the GNU General Public License v3.0 or later. See
+KurumiContainerd is licensed under the GNU General Public License v3.0 or later. See
 [LICENSE](LICENSE).

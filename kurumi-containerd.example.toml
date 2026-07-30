@@ -1,0 +1,55 @@
+[runtime]
+# Required and intentionally has no built-in default. Relative paths are
+# resolved from this TOML file, not from the process working directory.
+workdir = "./var/kurumi-containerd"
+stop_timeout_seconds = 15
+
+[container]
+name = "debian-dev"
+# Stable external identity. The CLI generates and persists this when absent.
+# uuid = "00000000-0000-0000-0000-000000000000"
+rootfs = "./rootfs"
+# rootfs_image = "./rootfs.img" # mutually exclusive with rootfs
+hostname = "debian-dev"
+init = "/sbin/init"
+foreground = false
+volatile = false
+network = "host"
+# Optional host environment file. Relative paths resolve from this TOML file;
+# [container.environment] values below override duplicate keys from the file.
+# environment_file = "./container.env"
+
+[container.network_options]
+address = "172.28.0.2"
+gateway = "172.28.0.1"
+prefix = 16
+bridge = "kurumi-br0"
+gateway_bridge = ""
+dns = ["1.1.1.1", "8.8.8.8"]
+
+[container.android]
+storage = false
+gpu = false
+binder = false
+termux_x11 = false
+virgl = false
+pulse_audio = false
+selinux_permissive = false
+
+[container.resources]
+# memory_bytes = 536870912
+# cpu_quota = 100000
+# cpu_period = 100000
+# pids = 512
+
+[container.security]
+read_only_sys = true
+allow_user_namespaces = false
+
+[container.environment]
+LANG = "C.UTF-8"
+
+[[container.mounts]]
+source = "./shared"
+target = "/mnt/shared"
+read_only = false

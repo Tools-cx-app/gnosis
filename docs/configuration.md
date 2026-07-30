@@ -1,7 +1,7 @@
 # Configuration
 
-gnosis uses strict TOML. Unknown fields and invalid values are rejected.
-Start from [gnosis.example.toml](../gnosis.example.toml).
+KurumiContainerd uses strict TOML. Unknown fields and invalid values are rejected.
+Start from [kurumi-containerd.example.toml](../kurumi-containerd.example.toml).
 
 Host paths may be absolute or relative to the TOML file. Container paths such
 as `init`, mount targets, and device paths are always paths inside the
@@ -11,7 +11,7 @@ container.
 
 ```toml
 [runtime]
-workdir = "./var/gnosis"
+workdir = "./var/kurumi-containerd"
 stop_timeout_seconds = 15
 ```
 
@@ -48,7 +48,7 @@ Network modes are `host`, `none`, `nat`, `gateway`, and `dhcp`.
 address = "172.28.0.2"
 gateway = "172.28.0.1"
 prefix = 16
-bridge = "gnosis-br0"
+bridge = "kurumi-br0"
 gateway_bridge = ""
 dns = ["1.1.1.1", "8.8.8.8"]
 
@@ -113,6 +113,6 @@ without parent traversal.
 ## Android host integration
 
 The optional `[container.android]` table controls selected storage, GPU,
-Binder, Termux:X11, VirGL, PulseAudio, and SELinux integration when gnosis is
+Binder, Termux:X11, VirGL, PulseAudio, and SELinux integration when KurumiContainerd is
 built for Android. These options fail closed on unsupported hosts. They are
 runtime features and do not require or provide an Android application.

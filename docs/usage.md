@@ -1,16 +1,16 @@
 # CLI usage
 
-gnosis manages one configured container per invocation. Use separate TOML
+KurumiContainerd manages one configured container per invocation. Use separate TOML
 files for multiple containers and point them at the same protected runtime
 work directory when shared listing and recovery are required.
 
 ## Invocation
 
 ```text
-gnosis [--config PATH] COMMAND
+kurumi-containerd [--config PATH] COMMAND
 ```
 
-The config path defaults to `gnosis.toml`. `GNOSIS_CONFIG` provides the
+The config path defaults to `kurumi-containerd.toml`. `KURUMI_CONTAINERD_CONFIG` provides the
 same value through the environment. `check` is the only command that does not
 load a configuration.
 
@@ -20,10 +20,10 @@ cgroups, and network interfaces.
 ## Lifecycle
 
 ```bash
-sudo gnosis --config debian.toml start
-sudo gnosis --config debian.toml start --foreground
-sudo gnosis --config debian.toml restart
-sudo gnosis --config debian.toml stop
+sudo kurumi-containerd --config debian.toml start
+sudo kurumi-containerd --config debian.toml start --foreground
+sudo kurumi-containerd --config debian.toml restart
+sudo kurumi-containerd --config debian.toml stop
 ```
 
 Background start detaches a monitor process. Foreground start connects the
@@ -36,10 +36,10 @@ after `runtime.stop_timeout_seconds`.
 ## Enter and run
 
 ```bash
-sudo gnosis --config debian.toml enter
-sudo gnosis --config debian.toml enter developer
-sudo gnosis --config debian.toml run uname -a
-sudo gnosis --config debian.toml run sh -c 'id && mount'
+sudo kurumi-containerd --config debian.toml enter
+sudo kurumi-containerd --config debian.toml enter developer
+sudo kurumi-containerd --config debian.toml run uname -a
+sudo kurumi-containerd --config debian.toml run sh -c 'id && mount'
 ```
 
 `enter` opens an interactive login and defaults to `root`. `run` executes
@@ -49,10 +49,10 @@ redirection, or compound commands.
 ## Inspect and recover
 
 ```bash
-sudo gnosis --config debian.toml info
-sudo gnosis --config debian.toml pid
-sudo gnosis --config debian.toml show
-sudo gnosis --config debian.toml scan
+sudo kurumi-containerd --config debian.toml info
+sudo kurumi-containerd --config debian.toml pid
+sudo kurumi-containerd --config debian.toml show
+sudo kurumi-containerd --config debian.toml scan
 ```
 
 `show` reads live states from the configured work directory. `scan` searches
@@ -65,7 +65,7 @@ memory use, process count, generation, rootfs, and UUID.
 ## Host checks
 
 ```bash
-sudo gnosis check
+sudo kurumi-containerd check
 ```
 
 The check command probes mount, PID, UTS, IPC, and network namespaces, then

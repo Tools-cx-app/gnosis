@@ -1,6 +1,6 @@
 # Implementation status
 
-gnosis is an early Rust implementation. The core lifecycle is functional,
+KurumiContainerd is an early Rust implementation. The core lifecycle is functional,
 but operators should evaluate it on disposable systems before relying on it.
 
 ## Implemented

@@ -1,0 +1,17 @@
+[package]
+name = "kurumi-containerd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+kurumi-containerd-config = { path = "../kurumi-containerd-config" }
+kurumi-containerd-helper.workspace = true
+kurumi-containerd-runtime = { path = "../kurumi-containerd-runtime" }
+procfs.workspace = true
+which.workspace = true
+
+[lints]
+workspace = true

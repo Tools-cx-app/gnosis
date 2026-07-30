@@ -1,20 +1,21 @@
 # Runtime architecture
 
-gnosis is a Cargo workspace with three crates:
+KurumiContainerd is a Cargo workspace with four crates:
 
 ```text
 crates/
-  gnosis-cli/      command parsing and output
-  gnosis-config/   strict TOML schema, path resolution, and validation
-  gnosis-runtime/  lifecycle, isolation, state, and host integration
+  kurumi-containerd-cli/      command parsing and output
+  kurumi-containerd-config/   strict TOML schema, path resolution, and validation
+  kurumi-containerd-helper/   target-aware Linux and Android syscall wrappers
+  kurumi-containerd-runtime/  lifecycle, isolation, state, and host integration
 ```
 
-The `gnosis` package produces the command-line binary. The two library
-crates are internal implementation boundaries.
+The `kurumi-containerd` package produces the command-line binary. The library
+crates provide internal implementation boundaries.
 
 Dependencies flow in one direction: the CLI uses the runtime and
 configuration crates, while the runtime depends on configuration. Host and
-container implementation details remain private to `gnosis-runtime`.
+container implementation details remain private to `kurumi-containerd-runtime`.
 
 ## Configuration modules
 
@@ -28,7 +29,7 @@ src/
   config.rs  loading, path resolution, validation, and environment parsing
 ```
 
-Callers import schema types from `gnosis_config`; the internal module layout
+Callers import schema types from `kurumi_containerd_config`; the internal module layout
 does not leak into the CLI or runtime.
 
 ## Lifecycle
@@ -79,7 +80,7 @@ The main modules are:
 Runtime directories and files are created with restrictive ownership and
 permissions. State updates use no-follow opens, random temporary files, fsync,
 and atomic rename. Recovery requires both a protected host record and matching
-markers under `/run/gnosis` inside the container.
+markers under `/run/kurumi-containerd` inside the container.
 
 The runtime reduces capabilities and installs a classic-BPF seccomp filter,
 but privileged container mechanisms still share the host kernel. The design

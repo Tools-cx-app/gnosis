@@ -1,5 +1,5 @@
 /target/
-/gnosis.toml
+/kurumi-containerd.toml
 /var/
 
 *.img

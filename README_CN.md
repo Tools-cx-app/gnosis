@@ -1,12 +1,15 @@
-# gnosis
+# KurumiContainerd
 
-gnosis 是一个使用 Rust 编写的特权 Linux 容器运行时和命令行工具。它通过
+KurumiContainerd 是一个使用 Rust 编写的特权 Linux 容器运行时和命令行工具。它通过
 Linux namespace、挂载、cgroup、网络及持久化 TOML 配置管理轻量级系统容器。
+
+项目名中的 **Kurumi** 是日语“胡桃”（くるみ）的罗马字，后缀
+**Containerd** 表明它是一个容器运行时项目。
 
 本仓库只包含 CLI 和运行时，不包含 Android App。运行时在 Android 目标上编译
 和执行时，仍可按配置暴露部分 Android 主机资源。
 
-> gnosis 是容器运行时，不是安全沙箱。请只运行可信的 rootfs 和命令。
+> KurumiContainerd 是容器运行时，不是安全沙箱。请只运行可信的 rootfs 和命令。
 
 ## 主要能力
 
@@ -33,7 +36,7 @@ Linux namespace、挂载、cgroup、网络及持久化 TOML 配置管理轻量�
 启动容器前可检查主机能力：
 
 ```bash
-sudo cargo run --release -p gnosis -- check
+sudo cargo run --release -p kurumi-containerd -- check
 ```
 
 ## 构建
@@ -42,20 +45,21 @@ sudo cargo run --release -p gnosis -- check
 cargo build --release
 ```
 
-生成的二进制位于 `target/release/gnosis`。
+生成的二进制位于 `target/release/kurumi-containerd`。
 
 ## 快速开始
 
 ```bash
-cp gnosis.example.toml gnosis.toml
-$EDITOR gnosis.toml
-sudo ./target/release/gnosis --config gnosis.toml start
-sudo ./target/release/gnosis --config gnosis.toml info
-sudo ./target/release/gnosis --config gnosis.toml enter
-sudo ./target/release/gnosis --config gnosis.toml stop
+cp kurumi-containerd.example.toml kurumi-containerd.toml
+$EDITOR kurumi-containerd.toml
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml start
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml info
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml enter
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml stop
 ```
 
-`--config` 默认读取 `gnosis.toml`，也可通过 `GNOSIS_CONFIG` 指定。
+`--config` 默认读取 `kurumi-containerd.toml`，也可通过
+`KURUMI_CONTAINERD_CONFIG` 指定。
 配置中的相对主机路径以 TOML 文件所在目录为基准，而不是当前工作目录。
 
 ## 命令
@@ -82,5 +86,5 @@ check                   检查主机能力
 
 ## 许可证
 
-gnosis 使用 GNU General Public License v3.0 or later，详见
+KurumiContainerd 使用 GNU General Public License v3.0 or later，详见
 [LICENSE](LICENSE)。

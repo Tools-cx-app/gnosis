@@ -190,55 +190,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gnosis"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "clap",
- "gnosis-config",
- "gnosis-helper",
- "gnosis-runtime",
- "procfs",
- "which",
-]
-
-[[package]]
-name = "gnosis-config"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "serde",
- "tempfile",
- "toml",
- "uuid",
-]
-
-[[package]]
-name = "gnosis-helper"
-version = "0.1.1"
-dependencies = [
- "bitflags",
- "libc",
-]
-
-[[package]]
-name = "gnosis-runtime"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "fs2",
- "gnosis-config",
- "gnosis-helper",
- "mio",
- "procfs",
- "serde",
- "serde_json",
- "tempfile",
- "toml",
- "uuid",
-]
-
-[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,6 +238,55 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kurumi-containerd"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "kurumi-containerd-config",
+ "kurumi-containerd-helper",
+ "kurumi-containerd-runtime",
+ "procfs",
+ "which",
+]
+
+[[package]]
+name = "kurumi-containerd-config"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "tempfile",
+ "toml",
+ "uuid",
+]
+
+[[package]]
+name = "kurumi-containerd-helper"
+version = "0.1.1"
+dependencies = [
+ "bitflags",
+ "libc",
+]
+
+[[package]]
+name = "kurumi-containerd-runtime"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "fs2",
+ "kurumi-containerd-config",
+ "kurumi-containerd-helper",
+ "mio",
+ "procfs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "uuid",
 ]
 
 [[package]]
