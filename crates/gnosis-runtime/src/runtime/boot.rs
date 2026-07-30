@@ -262,7 +262,7 @@ impl Runtime {
                 if let Some(parent) = target.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                File::create(&target)?;
+                create_mountpoint_file(&target)?;
             }
             mount(
                 Some(&source),
@@ -323,6 +323,13 @@ fn strip_root(path: &Path) -> &Path {
     path.strip_prefix("/").unwrap_or(path)
 }
 
+fn create_mountpoint_file(path: &Path) -> Result<()> {
+    if !path.try_exists()? {
+        File::create_new(path)?;
+    }
+    Ok(())
+}
+
 fn set_container_hostname(hostname: &str) -> Result<()> {
     set_hostname(hostname).context("failed to set hostname")
 }
@@ -345,4 +352,20 @@ fn ensure_no_symlink_components(rootfs: &Path, target: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_mountpoint_file;
+
+    #[test]
+    fn existing_mountpoint_file_is_not_truncated() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target");
+        std::fs::write(&path, "existing content").unwrap();
+
+        create_mountpoint_file(&path).unwrap();
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "existing content");
+    }
 }
