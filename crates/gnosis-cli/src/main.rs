@@ -47,6 +47,7 @@ enum Commands {
         user: String,
     },
     /// Run a command in the container.
+    #[command(visible_alias = "exec")]
     Run {
         #[arg(required = true, trailing_var_arg = true)]
         command: Vec<String>,
@@ -305,5 +306,14 @@ mod tests {
                 command.get_name()
             );
         }
+    }
+
+    #[test]
+    fn exec_alias_parses_as_run() {
+        let cli = Cli::try_parse_from(["gnosis", "exec", "sh", "-c", "true"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Run { command } if command == ["sh", "-c", "true"]
+        ));
     }
 }
