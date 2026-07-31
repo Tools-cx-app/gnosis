@@ -20,6 +20,11 @@ pub struct Network {
 impl Network {
     #[allow(clippy::too_many_lines)]
     pub fn setup_host(config: &Config, init_pid: i32, host_netns: &File) -> Result<Self> {
+        tracing::debug!(
+            network_mode = ?config.container.network,
+            init_pid,
+            "setting up host network"
+        );
         let mut network = Self::empty();
         if config.container.network == NetworkMode::Host {
             return Ok(network);
@@ -162,6 +167,11 @@ impl Network {
     }
 
     pub fn setup_child(config: &Config, peer_name: &str) -> Result<()> {
+        tracing::debug!(
+            network_mode = ?config.container.network,
+            peer_name,
+            "setting up container network"
+        );
         if config.container.network == NetworkMode::Host {
             return Ok(());
         }
@@ -195,6 +205,7 @@ impl Network {
         if config.container.network != NetworkMode::Dhcp {
             return Ok(());
         }
+        tracing::debug!("setting up DHCP");
         if command_exists("udhcpc") {
             return run("udhcpc", &["-n", "-q", "-i", "eth0"])
                 .context("DHCP configuration failed with udhcpc");

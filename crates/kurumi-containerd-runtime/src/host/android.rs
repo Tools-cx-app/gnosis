@@ -80,6 +80,7 @@ pub fn setup_before_pivot(rootfs: &Path, config: &AndroidConfig) -> Result<()> {
     if !requested(config) {
         return Ok(());
     }
+    tracing::debug!(rootfs = %rootfs.display(), "setting up Android integration before pivot");
 
     if config.storage {
         bind_path(
@@ -95,6 +96,7 @@ pub fn setup_after_pivot(config: &AndroidConfig) -> Result<()> {
     if !requested(config) {
         return Ok(());
     }
+    tracing::debug!("setting up Android integration after pivot");
     if config.gpu {
         for (directory, prefix) in GPU_DIRECTORIES {
             mirror_matching(directory, prefix)?;

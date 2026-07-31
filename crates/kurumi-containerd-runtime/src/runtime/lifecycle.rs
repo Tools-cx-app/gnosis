@@ -88,7 +88,7 @@ impl Runtime {
                 let result = self.monitor(writer, foreground);
                 if let Err(error) = result {
                     self.remove_state().ok();
-                    eprintln!("KurumiContainerd monitor: {error:#}");
+                    tracing::error!("monitor failed: {error:#}");
                     std::process::exit(1);
                 }
                 std::process::exit(0);
@@ -145,74 +145,71 @@ impl Runtime {
                 pipe().context("failed to create result pipe")?;
 
             // SAFETY: the single-threaded monitor forks a generation worker which only unshares and forks init.
-            let intermediate = match unsafe { fork() }
-                .context("failed to fork generation worker")?
-            {
-                ForkResult::Parent { child } => child,
-                ForkResult::Child => {
-                    drop(startup.take());
-                    drop(generation_lock.take());
-                    drop(pid_reader);
-                    drop(result_reader);
-                    let mut flags = NamespaceFlags::PID;
-                    if self.config.container.network != NetworkMode::Host {
-                        flags |= NamespaceFlags::NETWORK;
-                    }
-                    unshare(flags).unwrap_or_else(|error| {
-                            eprintln!(
-                                "KurumiContainerd generation: failed to create PID/network namespace: {error}"
-                            );
+            let intermediate =
+                match unsafe { fork() }.context("failed to fork generation worker")? {
+                    ForkResult::Parent { child } => child,
+                    ForkResult::Child => {
+                        drop(startup.take());
+                        drop(generation_lock.take());
+                        drop(pid_reader);
+                        drop(result_reader);
+                        let mut flags = NamespaceFlags::PID;
+                        if self.config.container.network != NetworkMode::Host {
+                            flags |= NamespaceFlags::NETWORK;
+                        }
+                        unshare(flags).unwrap_or_else(|error| {
+                            tracing::error!("failed to create PID/network namespace: {error}");
                             std::process::exit(125);
                         });
-                    // SAFETY: the generation worker is single-threaded and the child immediately boots.
-                    match unsafe { fork() }.unwrap_or_else(|error| {
-                        eprintln!("KurumiContainerd generation: failed to fork init: {error}");
-                        std::process::exit(125);
-                    }) {
-                        ForkResult::Parent { child } => {
-                            drop(network_reader);
-                            drop(network_writer);
-                            drop(boot_reader);
-                            drop(boot_writer);
-                            write(&mut pid_writer, &child.to_ne_bytes())
-                                .unwrap_or_else(|_| std::process::exit(125));
-                            drop(pid_writer);
-                            if !foreground {
-                                redirect_stdio_to_null();
+                        // SAFETY: the generation worker is single-threaded and the child immediately boots.
+                        match unsafe { fork() }.unwrap_or_else(|error| {
+                            tracing::error!("failed to fork init: {error}");
+                            std::process::exit(125);
+                        }) {
+                            ForkResult::Parent { child } => {
+                                drop(network_reader);
+                                drop(network_writer);
+                                drop(boot_reader);
+                                drop(boot_writer);
+                                write(&mut pid_writer, &child.to_ne_bytes())
+                                    .unwrap_or_else(|_| std::process::exit(125));
+                                drop(pid_writer);
+                                if !foreground {
+                                    redirect_stdio_to_null();
+                                }
+                                let status = waitpid_retry(child)
+                                    .unwrap_or_else(|_| std::process::exit(125));
+                                let result = if is_reboot_status(status) { b'R' } else { b'E' };
+                                write(&mut result_writer, &[result])
+                                    .unwrap_or_else(|_| std::process::exit(125));
+                                std::process::exit(wait_status_code(status));
                             }
-                            let status =
-                                waitpid_retry(child).unwrap_or_else(|_| std::process::exit(125));
-                            let result = if is_reboot_status(status) { b'R' } else { b'E' };
-                            write(&mut result_writer, &[result])
-                                .unwrap_or_else(|_| std::process::exit(125));
-                            std::process::exit(wait_status_code(status));
-                        }
-                        ForkResult::Child => {
-                            drop(pid_writer);
-                            drop(result_writer);
-                            drop(network_writer);
-                            drop(boot_reader);
-                            reset_init_signals();
-                            self.boot(
-                                &boot_writer,
-                                network_reader,
-                                rootfs.as_ref(),
-                                Some(&console),
-                                init_system,
-                                cgroup.unified(),
-                                uuid,
-                            )
-                            .unwrap_or_else(|error| {
-                                let message = format!("{error:#}");
-                                let _ = write(&boot_writer, message.as_bytes());
-                                eprintln!("KurumiContainerd boot: {error:#}");
-                                std::process::exit(127);
-                            });
-                            unreachable!();
+                            ForkResult::Child => {
+                                drop(pid_writer);
+                                drop(result_writer);
+                                drop(network_writer);
+                                drop(boot_reader);
+                                reset_init_signals();
+                                self.boot(
+                                    &boot_writer,
+                                    network_reader,
+                                    rootfs.as_ref(),
+                                    Some(&console),
+                                    init_system,
+                                    cgroup.unified(),
+                                    uuid,
+                                )
+                                .unwrap_or_else(|error| {
+                                    let message = format!("{error:#}");
+                                    let _ = write(&boot_writer, message.as_bytes());
+                                    tracing::error!("container boot failed: {error:#}");
+                                    std::process::exit(127);
+                                });
+                                unreachable!();
+                            }
                         }
                     }
-                }
-            };
+                };
 
             drop(pid_writer);
             drop(result_writer);

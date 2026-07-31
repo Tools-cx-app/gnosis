@@ -321,7 +321,7 @@ fn signal_name(signal: i32) -> &'static str {
 }
 
 fn exec_failure(message: &str) -> ! {
-    eprintln!("KurumiContainerd exec: {message}");
+    tracing::error!("exec failed: {message}");
     std::process::exit(126)
 }
 

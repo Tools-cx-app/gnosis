@@ -11,6 +11,8 @@ kurumi-containerd-config = { path = "../kurumi-containerd-config" }
 kurumi-containerd-helper.workspace = true
 kurumi-containerd-runtime = { path = "../kurumi-containerd-runtime" }
 procfs.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 which.workspace = true
 
 [lints]

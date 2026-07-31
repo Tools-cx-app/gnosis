@@ -8,11 +8,7 @@ use clap::{Parser, Subcommand};
 use kurumi_containerd_config::Config;
 use kurumi_containerd_helper::{ForkResult, NamespaceFlags, WaitStatus, fork, unshare, waitpid};
 use kurumi_containerd_runtime::{ContainerInfo, ContainerState, Runtime};
-
-const GREEN: &str = "\x1b[1;32m";
-const YELLOW: &str = "\x1b[1;33m";
-const BOLD: &str = "\x1b[1m";
-const RESET: &str = "\x1b[0m";
+use tracing::level_filters::LevelFilter;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Privileged Linux container runtime")]
@@ -25,6 +21,9 @@ struct Cli {
         default_value = "kurumi-containerd.toml"
     )]
     config: PathBuf,
+    /// Logger verbose
+    #[arg(short, long, default_value = "true")]
+    verbose: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -70,7 +69,16 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli: Cli = Cli::parse();
+    tracing_subscriber::fmt()
+        .with_max_level(if cli.verbose {
+            LevelFilter::DEBUG
+        } else {
+            LevelFilter::INFO
+        })
+        .with_target(false)
+        .with_ansi(io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none())
+        .init();
     if matches!(cli.command, Commands::Check) {
         return check();
     }
@@ -80,24 +88,24 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Start { foreground } => {
             let state = runtime.start(foreground)?;
-            print_started(&state);
+            log_started(&state);
         }
         Commands::Stop => {
             runtime.stop()?;
-            println!("Stopped {container_name}.");
+            tracing::info!(container = container_name, "container stopped");
         }
         Commands::Restart { foreground } => {
             let state = runtime.restart(foreground)?;
-            print_started(&state);
+            log_started(&state);
         }
         Commands::Enter { user } => runtime.enter(&user)?,
         Commands::Run { command } => runtime.run(&command)?,
-        Commands::Info => print_info(&runtime.info()?),
-        Commands::Pid => println!("{}", runtime.pid()?),
-        Commands::Show => print_containers(&runtime.list()?),
+        Commands::Info => log_info(&runtime.info()?),
+        Commands::Pid => tracing::info!(pid = runtime.pid()?, "container PID"),
+        Commands::Show => log_containers(&runtime.list()?),
         Commands::Scan => {
             let states = runtime.scan()?;
-            print_recovered(&states);
+            log_recovered(&states);
         }
         Commands::Check => unreachable!("check is handled before loading configuration"),
     }
@@ -105,12 +113,7 @@ fn main() -> Result<()> {
 }
 
 fn check() -> Result<()> {
-    println!(
-        "{}KurumiContainerd host capabilities{}",
-        style(BOLD),
-        style(RESET)
-    );
-    println!("{:>12}: {}", "Host", std::env::consts::OS);
+    tracing::info!(host = std::env::consts::OS, "checking host capabilities");
     let namespaces = [
         probe_namespace(NamespaceFlags::MOUNT),
         probe_namespace(NamespaceFlags::PID),
@@ -119,34 +122,34 @@ fn check() -> Result<()> {
         probe_namespace(NamespaceFlags::NETWORK),
     ];
     let namespaces_available = namespaces.into_iter().all(|available| available);
-    print_check(
+    log_check(
         "Namespaces",
         namespaces_available,
         "mount, pid, uts, ipc, network",
     );
-    print_check(
+    log_check(
         "OverlayFS",
         std::fs::read_to_string("/proc/filesystems")?.contains("overlay"),
         "kernel filesystem",
     );
     let mountinfo = procfs::process::Process::myself()?.mountinfo()?;
-    print_check(
+    log_check(
         "Cgroup v2",
         Path::new("/sys/fs/cgroup/cgroup.controllers").exists(),
         "unified hierarchy",
     );
-    print_check(
+    log_check(
         "Cgroup v1",
         mountinfo.0.iter().any(|mount| mount.fs_type == "cgroup"),
         "legacy hierarchy",
     );
-    print_check(
+    log_check(
         "Pidfd",
         kurumi_containerd_runtime::pidfd_available(),
         "process handles",
     );
-    print_command("ip");
-    print_command("iptables");
+    log_command("ip");
+    log_command("iptables");
     if !namespaces_available {
         bail!("one or more required namespaces are unavailable");
     }
@@ -167,132 +170,66 @@ fn probe_namespace(flag: NamespaceFlags) -> bool {
     }
 }
 
-fn print_started(state: &ContainerState) {
-    println!(
-        "{}{}{} Started {}.",
-        style(GREEN),
-        marker(),
-        style(RESET),
-        state.name
+fn log_started(state: &ContainerState) {
+    tracing::info!(
+        container = state.name,
+        pid = state.init_pid,
+        "container started"
     );
-    println!("{:>12}: active (running)", "Active");
-    println!("{:>12}: {}", "Main PID", state.init_pid);
 }
 
-fn print_info(info: &ContainerInfo) {
-    let color = if info.active { GREEN } else { YELLOW };
-    println!(
-        "{}{}{} {}",
-        style(color),
-        status_marker(info.active),
-        style(RESET),
-        info.name
+fn log_info(info: &ContainerInfo) {
+    tracing::info!(
+        container = info.name,
+        active = info.active,
+        init_pid = ?info.init_pid,
+        monitor_pid = ?info.monitor_pid,
+        rootfs = %info.rootfs.display(),
+        uuid = ?info.uuid,
+        init_system = ?info.init_system,
+        generation = ?info.generation,
+        uptime_seconds = ?info.uptime_seconds,
+        memory_kb = ?info.memory_kb,
+        processes = ?info.processes,
+        "container info"
     );
-    let rendered = info.to_string();
-    if let Some((_, details)) = rendered.split_once('\n') {
-        println!("{details}");
-    }
 }
 
-fn print_containers(states: &[ContainerState]) {
-    let name_width = states
-        .iter()
-        .map(|state| state.name.len())
-        .max()
-        .unwrap_or(4)
-        .max(4);
-    println!(
-        "  {:<name_width$} {:>8} {:<10} ROOTFS",
-        "NAME", "PID", "STATE"
-    );
+fn log_containers(states: &[ContainerState]) {
     for state in states {
-        println!(
-            "{}{}{} {:<name_width$} {:>8} {:<10} {}",
-            style(GREEN),
-            marker(),
-            style(RESET),
-            state.name,
-            state.init_pid,
-            "running",
-            state.rootfs.display()
+        tracing::info!(
+            container = state.name,
+            pid = state.init_pid,
+            rootfs = %state.rootfs.display(),
+            "running container"
         );
     }
-    println!();
-    println!(
-        "{} container{} listed.",
-        states.len(),
-        if states.len() == 1 { "" } else { "s" }
-    );
+    tracing::info!(count = states.len(), "containers listed");
 }
 
-fn print_recovered(states: &[ContainerState]) {
+fn log_recovered(states: &[ContainerState]) {
     if states.is_empty() {
-        println!("No containers required recovery.");
+        tracing::info!("no containers required recovery");
         return;
     }
     for state in states {
-        println!(
-            "{}{}{} Recovered {} (PID {}).",
-            style(GREEN),
-            marker(),
-            style(RESET),
-            state.name,
-            state.init_pid
+        tracing::info!(
+            container = state.name,
+            pid = state.init_pid,
+            "container recovered"
         );
     }
-    println!();
-    println!(
-        "Recovered {} container{}.",
-        states.len(),
-        if states.len() == 1 { "" } else { "s" }
-    );
+    tracing::info!(count = states.len(), "container recovery completed");
 }
 
-fn print_check(label: &str, available: bool, detail: &str) {
-    let (color, status) = if available {
-        (GREEN, "available")
-    } else {
-        (YELLOW, "unavailable")
-    };
-    println!(
-        "{:>12}: {}{}{} ({detail})",
-        label,
-        style(color),
-        status,
-        style(RESET)
-    );
+fn log_check(capability: &str, available: bool, detail: &str) {
+    tracing::info!(capability, available, detail, "host capability");
 }
 
-fn print_command(command: &str) {
+fn log_command(command: &str) {
     match which::which(command) {
-        Ok(path) => print_check(command, true, &path.display().to_string()),
-        Err(_) => print_check(command, false, "not found in PATH"),
-    }
-}
-
-fn marker() -> &'static str {
-    if io::stdout().is_terminal() {
-        "●"
-    } else {
-        "*"
-    }
-}
-
-fn status_marker(active: bool) -> &'static str {
-    if active {
-        marker()
-    } else if io::stdout().is_terminal() {
-        "○"
-    } else {
-        "o"
-    }
-}
-
-fn style(code: &'static str) -> &'static str {
-    if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
-        code
-    } else {
-        ""
+        Ok(path) => log_check(command, true, &path.display().to_string()),
+        Err(_) => log_check(command, false, "not found in PATH"),
     }
 }
 

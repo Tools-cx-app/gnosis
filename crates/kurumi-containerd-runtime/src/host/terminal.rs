@@ -75,7 +75,7 @@ fn open_console_pty_unprivileged(winsize: Option<&WindowSize>) -> Result<PtyPair
             {
                 Ok(()) => 0,
                 Err(error) => {
-                    eprintln!("KurumiContainerd PTY broker: {error:#}");
+                    tracing::error!("PTY broker failed: {error:#}");
                     1
                 }
             };

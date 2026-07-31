@@ -288,6 +288,7 @@ impl Runtime {
     }
 
     fn setup_volatile_root(&self, lower: &Path) -> Result<PathBuf> {
+        tracing::debug!(lower = %lower.display(), "setting up volatile rootfs");
         let base = self.volatile_dir.join(&self.config.container.name);
         fs::create_dir_all(&base)?;
         mount(
