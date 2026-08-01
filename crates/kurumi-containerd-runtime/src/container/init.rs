@@ -295,8 +295,9 @@ fn read_prefix(path: &Path, limit: usize) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
 
     fn create(root: &Path, path: &str, content: &[u8]) {
         let path = root.join(path);

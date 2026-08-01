@@ -317,13 +317,15 @@ impl Drop for Cgroup {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use kurumi_containerd_config::ResourceConfig;
+    use procfs::process::MountInfo;
+
     use super::{
         Cgroup, Controller, cgroup_required, parse_cgroup1_roots, requested_controllers,
         write_limit,
     };
-    use kurumi_containerd_config::ResourceConfig;
-    use procfs::process::MountInfo;
-    use std::path::PathBuf;
 
     #[test]
     fn systemd_requires_cgroup_without_resource_limits() {

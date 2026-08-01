@@ -1,15 +1,14 @@
+#[cfg(target_os = "android")]
+use std::{
+    fs::OpenOptions,
+    os::{fd::AsFd, unix::fs::OpenOptionsExt},
+};
 use std::{
     io,
     os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
 };
 
 use crate::syscall::cvt;
-
-#[cfg(target_os = "android")]
-use std::{
-    fs::OpenOptions,
-    os::{fd::AsFd, unix::fs::OpenOptionsExt},
-};
 
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]

@@ -116,9 +116,10 @@ fn variable(key: &str, value: &str) -> Result<CString> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use kurumi_containerd_config::Config;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn applies_defaults_and_user_overrides() {

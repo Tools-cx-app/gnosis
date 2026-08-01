@@ -415,8 +415,9 @@ fn masked_network(address: std::net::Ipv4Addr, prefix: u8) -> std::net::Ipv4Addr
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::os::unix::fs::symlink;
+
+    use super::*;
 
     #[test]
     fn replaces_dangling_resolv_conf_symlink() {

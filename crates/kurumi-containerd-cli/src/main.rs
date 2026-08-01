@@ -289,8 +289,9 @@ fn log_command(command: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::CommandFactory;
+
+    use super::*;
 
     #[test]
     fn cli_definition_is_valid() {

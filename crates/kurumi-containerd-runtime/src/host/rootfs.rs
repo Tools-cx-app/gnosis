@@ -3,7 +3,7 @@ use std::{
     io::Read,
     os::{
         fd::AsFd,
-        unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
     process::Command,
@@ -15,7 +15,6 @@ use kurumi_containerd_helper::{
     LoopController, LoopDevice, MountFlags, effective_uid, mount, rename_exchange, sync_filesystem,
     unmount,
 };
-use std::os::unix::fs::MetadataExt;
 use uuid::Uuid;
 
 use super::archive;

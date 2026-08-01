@@ -7,7 +7,6 @@ use kurumi_containerd_helper::{
     SECCOMP_KILL_PROCESS, blocked_syscalls, install_seccomp as install_seccomp_filter, mount,
     namespace_user_flag, syscall_clone, syscall_socket, syscall_unshare,
 };
-
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",

@@ -81,8 +81,9 @@ pub(super) fn reset_init_signals() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::process::Command;
+
+    use super::*;
 
     #[test]
     #[allow(clippy::zombie_processes)] // Reaped through kurumi_containerd_helper::waitpid below.
