@@ -120,15 +120,8 @@ fn extract_zip(reader: impl Read + Seek, target: &Path) -> Result<()> {
         let relative = entry
             .enclosed_name()
             .context("ZIP entry has an unsafe path")?;
-        ensure_safe_parent(target, &relative)?;
+        ensure_safe_path(target, &relative)?;
         let output = target.join(&relative);
-        ensure!(
-            !output
-                .symlink_metadata()
-                .is_ok_and(|metadata| metadata.file_type().is_symlink()),
-            "ZIP entry would overwrite a symlink: {}",
-            relative.display()
-        );
         let mode = entry
             .unix_mode()
             .unwrap_or(if entry.is_dir() { 0o755 } else { 0o644 });
@@ -166,7 +159,7 @@ fn extract_zip(reader: impl Read + Seek, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_safe_parent(root: &Path, relative: &Path) -> Result<()> {
+fn ensure_safe_path(root: &Path, relative: &Path) -> Result<()> {
     ensure!(
         !relative.is_absolute()
             && relative
@@ -176,15 +169,18 @@ fn ensure_safe_parent(root: &Path, relative: &Path) -> Result<()> {
         relative.display()
     );
     let mut current = root.to_path_buf();
-    if let Some(parent) = relative.parent() {
-        for component in parent.components() {
-            if let Component::Normal(component) = component {
-                current.push(component);
-                if current
-                    .symlink_metadata()
-                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
-                {
+    for component in relative.components() {
+        if let Component::Normal(component) = component {
+            current.push(component);
+            match current.symlink_metadata() {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
                     bail!("archive entry traverses a symlink: {}", relative.display());
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("failed to inspect {}", current.display()));
                 }
             }
         }
@@ -253,7 +249,7 @@ mod tests {
 
     #[test]
     fn rejects_zip_parent_traversal() {
-        assert!(ensure_safe_parent(Path::new("/rootfs"), Path::new("../escape")).is_err());
+        assert!(ensure_safe_path(Path::new("/rootfs"), Path::new("../escape")).is_err());
     }
 
     #[test]
@@ -353,6 +349,38 @@ mod tests {
 
         assert!(extract(&archive_path, &target).is_err());
         assert_eq!(fs::read_to_string(target.join("real")).unwrap(), "original");
+    }
+
+    #[test]
+    fn zip_directory_cannot_overwrite_symlink() {
+        let directory = tempdir().unwrap();
+        let archive_path = directory.path().join("rootfs.zip");
+        let mut archive = ZipWriter::new(File::create(&archive_path).unwrap());
+        archive
+            .add_directory(
+                "real/",
+                SimpleFileOptions::default().unix_permissions(0o755),
+            )
+            .unwrap();
+        archive
+            .add_symlink("usr", "real", SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .add_directory("usr/", SimpleFileOptions::default().unix_permissions(0o700))
+            .unwrap();
+        archive.finish().unwrap();
+        let target = directory.path().join("rootfs");
+        fs::create_dir(&target).unwrap();
+
+        assert!(extract(&archive_path, &target).is_err());
+        assert_eq!(
+            fs::metadata(target.join("real"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
     }
 
     #[test]
