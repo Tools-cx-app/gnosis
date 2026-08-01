@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    ffi::CString,
-    fs::{self, File},
-    os::fd::AsFd,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, ffi::CString, fs, os::fd::AsFd, path::Path};
 
 use anyhow::{Context, Result, bail, ensure};
 use kurumi_containerd_config::{AndroidConfig, NetworkMode};
@@ -12,11 +6,13 @@ use kurumi_containerd_helper::{
     ForkResult, NamespaceFlags, Signal, WaitStatus, chdir, chroot, current_pid, execve, fchdir,
     fork, init_groups, kill, kill_process_group, set_gid, set_uid, setns, socket_pair, waitpid,
 };
+use procfs::process::Process;
 
 use crate::{
     Runtime,
     container::{environment, security},
     host::{cgroup::Cgroup, terminal},
+    runtime::state::validate_process_identity_for,
 };
 
 impl Runtime {
@@ -48,13 +44,23 @@ impl Runtime {
         Self::ensure_root()?;
         let lock = self.lock()?;
         let state = self.require_state()?;
-        let proc_path = PathBuf::from(format!("/proc/{}", state.init_pid));
-        let root = File::open(proc_path.join("root")).context("failed to open container root")?;
+        let process = Process::new(state.init_pid).context("failed to open container process")?;
+        ensure!(
+            validate_process_identity_for(&state, &process),
+            "container init identity changed before namespace capture"
+        );
+        let root = process
+            .open_relative("root")
+            .context("failed to open container root")?;
         let namespaces = ["mnt", "uts", "ipc", "pid"]
             .into_iter()
             .chain((self.config.container.network != NetworkMode::Host).then_some("net"))
-            .map(|name| File::open(proc_path.join("ns").join(name)).map(|file| (name, file)))
-            .collect::<std::io::Result<Vec<_>>>()?;
+            .map(|name| {
+                process
+                    .open_relative(Path::new("ns").join(name))
+                    .map(|file| (name, file))
+            })
+            .collect::<procfs::ProcResult<Vec<_>>>()?;
         let terminal_socket = login_user
             .is_some()
             .then(socket_pair)

@@ -434,15 +434,25 @@ fn format_unit(value: u64, unit: u64, suffix: &str) -> String {
 }
 
 pub(crate) fn validate_process_identity(state: &ContainerState) -> bool {
+    Process::new(state.init_pid).is_ok_and(|process| validate_process_identity_for(state, &process))
+}
+
+pub(crate) fn validate_process_identity_for(state: &ContainerState, process: &Process) -> bool {
     host_boot_id().is_ok_and(|value| value == state.host_boot_id)
-        && process_start_time(state.init_pid).is_ok_and(|value| value == state.init_start_time)
-        && namespace_inode(state.init_pid, "pid")
+        && process
+            .stat()
+            .is_ok_and(|stat| stat.starttime == state.init_start_time)
+        && process_namespace_inode(process, "pid")
             .is_ok_and(|value| value == state.pid_namespace_inode)
-        && fs::read_to_string(format!(
-            "/proc/{}/root/run/kurumi-containerd/name",
-            state.init_pid
-        ))
-        .is_ok_and(|value| value == state.name)
+        && process
+            .open_relative("root/run/kurumi-containerd/name")
+            .and_then(|mut file| {
+                use std::io::Read;
+                let mut value = String::new();
+                file.read_to_string(&mut value)?;
+                Ok(value)
+            })
+            .is_ok_and(|value| value == state.name)
 }
 
 fn validate_monitor_identity(state: &ContainerState) -> bool {
