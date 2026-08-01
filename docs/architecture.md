@@ -67,7 +67,7 @@ The main modules are:
 - `runtime/execute.rs`: namespace entry, command execution, and interactive login
 - `container/environment.rs`: deterministic init and session environments
 - `container/init.rs`: init-family detection and shutdown protocols
-- `container/security.rs`: capabilities, seccomp, and protected kernel views
+- `container/security.rs`: seccomp and protected kernel views
 - `host/process.rs`: pidfd handles and procfs process identity helpers
 - `host/terminal.rs`: PTY allocation, descriptor passing, and console proxying
 - `host/rootfs.rs`: directory/image rootfs preparation and loop devices
@@ -82,6 +82,6 @@ permissions. State updates use no-follow opens, random temporary files, fsync,
 and atomic rename. Recovery requires both a protected host record and matching
 markers under `/run/kurumi-containerd` inside the container.
 
-The runtime reduces capabilities and installs a classic-BPF seccomp filter,
-but privileged container mechanisms still share the host kernel. The design
-does not claim a hostile-workload security boundary.
+The runtime installs a classic-BPF seccomp filter, but container root retains
+its capabilities and privileged container mechanisms still share the host
+kernel. The design does not claim a hostile-workload security boundary.

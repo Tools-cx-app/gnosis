@@ -483,7 +483,24 @@ fn process_namespace_inode(process: &Process, namespace: &str) -> Result<u64> {
 }
 
 fn read_state(path: &Path) -> Result<ContainerState> {
-    Ok(serde_json::from_slice(&fs::read(path)?)?)
+    use std::os::unix::fs::MetadataExt;
+
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_NOFOLLOW | OPEN_CLOEXEC)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    let parent = fs::metadata(path.parent().context("state path has no parent")?)?;
+    ensure!(metadata.is_file(), "state path is not a regular file");
+    ensure!(
+        metadata.uid() == parent.uid(),
+        "state file owner does not match its directory"
+    );
+    ensure!(
+        metadata.mode() & 0o022 == 0,
+        "state file must not be group/world writable"
+    );
+    Ok(serde_json::from_reader(file)?)
 }
 
 fn write_state_atomic(path: &Path, state: &ContainerState) -> Result<()> {
@@ -643,6 +660,17 @@ mod tests {
         write_state_atomic(&path, &state).unwrap();
         assert_eq!(read_state(&path).unwrap().uuid, Uuid::nil());
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn rejects_symlink_state_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target.json");
+        fs::write(&target, "{}").unwrap();
+        let path = directory.path().join("state.json");
+        std::os::unix::fs::symlink(target, &path).unwrap();
+
+        assert!(read_state(&path).is_err());
     }
 
     #[test]

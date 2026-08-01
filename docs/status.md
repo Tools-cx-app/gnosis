@@ -16,11 +16,12 @@ but operators should evaluate it on disposable systems before relying on it.
 - Persistent UUIDs and PID-reuse-resistant process identity
 - Init-aware graceful shutdown and internal reboot generations
 - PTY consoles and interactive sessions using descriptor passing
-- Capability reduction, seccomp, read-only sys/proc controls, and bind masks
+- Seccomp, read-only sys/proc controls, and bind masks
 - Optional Android storage/device/socket integration in the runtime
 
 ## Current limitations
 
+- Container root capabilities are not reduced
 - Networking depends on host `ip` and `iptables`
 - Port ranges and automatic upstream monitoring are not implemented
 - Interactive sessions cannot be detached and reattached

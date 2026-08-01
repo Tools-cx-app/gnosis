@@ -1,10 +1,13 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, File, OpenOptions},
+    io::Write,
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, chown},
     path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use fs2::FileExt;
 use uuid::Uuid;
 
 use crate::{Config, NetworkMode, Protocol};
@@ -50,9 +53,30 @@ impl Config {
     /// Returns an error when the source configuration is invalid or the
     /// persistent TOML rewrite cannot be committed.
     pub fn load_persistent(path: &Path) -> Result<Self> {
+        let persistent_path = path
+            .canonicalize()
+            .with_context(|| format!("failed to resolve config {}", path.display()))?;
+        let lock_path = persistent_path.with_file_name(format!(
+            ".{}.lock",
+            persistent_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open config lock {}", lock_path.display()))?;
+        lock.lock_exclusive()
+            .context("failed to lock persistent config")?;
         let config = Self::load(path)?;
         if config.container.uuid.is_none() {
-            let source = fs::read_to_string(path)
+            let source = fs::read_to_string(&persistent_path)
                 .with_context(|| format!("failed to read config {}", path.display()))?;
             let mut document: toml::Value = toml::from_str(&source)
                 .with_context(|| format!("failed to parse TOML config {}", path.display()))?;
@@ -66,13 +90,34 @@ impl Config {
             );
             let encoded = toml::to_string_pretty(&document)
                 .context("failed to serialize persistent TOML config")?;
-            let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-            fs::write(&temporary, encoded).with_context(|| {
-                format!("failed to write temporary config {}", temporary.display())
-            })?;
-            fs::rename(&temporary, path).with_context(|| {
-                format!("failed to commit persistent config {}", path.display())
-            })?;
+            let temporary = persistent_path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+            let metadata = fs::metadata(&persistent_path)?;
+            let result = (|| {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(metadata.permissions().mode())
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    .open(&temporary)?;
+                chown(&temporary, Some(metadata.uid()), Some(metadata.gid()))?;
+                fs::set_permissions(&temporary, metadata.permissions())?;
+                file.write_all(encoded.as_bytes())?;
+                file.sync_all()?;
+                fs::rename(&temporary, &persistent_path).with_context(|| {
+                    format!("failed to commit persistent config {}", path.display())
+                })?;
+                File::open(
+                    persistent_path
+                        .parent()
+                        .context("config path has no parent")?,
+                )?
+                .sync_all()?;
+                Ok::<(), anyhow::Error>(())
+            })();
+            if result.is_err() {
+                fs::remove_file(&temporary).ok();
+            }
+            result?;
             return Self::load(path);
         }
         Ok(config)

@@ -11,7 +11,7 @@ pub use model::{
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
 
     use tempfile::tempdir;
 
@@ -110,7 +110,74 @@ mod tests {
         let second = Config::load_persistent(&path).unwrap();
         assert_eq!(first.container.uuid, second.container.uuid);
         assert!(first.container.uuid.is_some());
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        assert!(!fs::read_to_string(path).unwrap().contains(".tmp"));
+    }
+
+    #[test]
+    fn persistent_load_preserves_permissions() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
+        fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
+        let path = dir.path().join("container.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+
+        Config::load_persistent(&path).unwrap();
+
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[test]
+    fn persistent_load_preserves_config_symlink() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
+        fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
+        let target = dir.path().join("container.target.toml");
+        fs::write(
+            &target,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+        )
+        .unwrap();
+        let path = dir.path().join("container.toml");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        Config::load_persistent(&path).unwrap();
+
+        assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
+        assert!(fs::read_to_string(target).unwrap().contains("uuid"));
+    }
+
+    #[test]
+    fn concurrent_persistent_loads_share_uuid() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("rootfs/sbin")).unwrap();
+        fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
+        let path = Arc::new(dir.path().join("container.toml"));
+        fs::write(
+            path.as_ref(),
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+        )
+        .unwrap();
+        let loads = (0..2)
+            .map(|_| {
+                let path = Arc::clone(&path);
+                std::thread::spawn(move || Config::load_persistent(&path).unwrap().container.uuid)
+            })
+            .collect::<Vec<_>>();
+        let uuids = loads
+            .into_iter()
+            .map(|load| load.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(uuids[0], uuids[1]);
+        assert!(uuids[0].is_some());
     }
 
     #[test]

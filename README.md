@@ -25,7 +25,7 @@ resources when compiled for and executed on Android.
 - Background monitoring and foreground PTY consoles
 - Container entry and command execution without an external `nsenter`
 - Persistent, PID-reuse-resistant runtime state
-- Capability reduction, seccomp filtering, and read-only kernel views
+- Seccomp filtering and read-only kernel views
 - Optional Android host integration without an Android app
 
 ## Requirements

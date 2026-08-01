@@ -333,6 +333,8 @@ name = "kurumi-containerd-config"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "fs2",
+ "libc",
  "serde",
  "tempfile",
  "toml",

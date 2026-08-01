@@ -30,29 +30,41 @@ impl Cgroup {
             let path = root.join("kurumi-containerd").join(name);
             fs::create_dir_all(&path)
                 .with_context(|| format!("failed to create cgroup {}", path.display()))?;
-            if let Some(memory) = resources.memory_bytes {
-                fs::write(path.join("memory.max"), memory.to_string())?;
-            }
-            if let Some(pids) = resources.pids {
-                fs::write(path.join("pids.max"), pids.to_string())?;
-            }
-            if let Some(quota) = resources.cpu_quota {
-                let period = resources.cpu_period.unwrap_or(100_000);
-                fs::write(path.join("cpu.max"), format!("{quota} {period}"))?;
-            }
-            fs::create_dir_all(workdir)?;
-            return Ok(Self {
-                paths: vec![path],
+            let cgroup = Self {
+                paths: vec![path.clone()],
                 unified: true,
-            });
+            };
+            write_limit(
+                &path.join("memory.max"),
+                resources.memory_bytes.map(|value| value.to_string()),
+                "max",
+            )?;
+            write_limit(
+                &path.join("pids.max"),
+                resources.pids.map(|value| value.to_string()),
+                "max",
+            )?;
+            write_limit(
+                &path.join("cpu.max"),
+                resources
+                    .cpu_quota
+                    .map(|quota| format!("{quota} {}", resources.cpu_period.unwrap_or(100_000))),
+                "max 100000",
+            )?;
+            fs::create_dir_all(workdir)?;
+            return Ok(cgroup);
         }
 
         let roots = ensure_cgroup1_roots(resources, required, bootstrap)?;
-        let mut paths = Vec::new();
+        let mut cgroup = Self {
+            paths: Vec::new(),
+            unified: false,
+        };
         for (controller, root) in roots {
             let path = root.join("kurumi-containerd").join(name);
             fs::create_dir_all(&path)
                 .with_context(|| format!("failed to create cgroup {}", path.display()))?;
+            cgroup.paths.push(path.clone());
             match controller {
                 Controller::Memory => {
                     if let Some(value) = resources.memory_bytes {
@@ -67,18 +79,17 @@ impl Cgroup {
                     }
                 }
                 Controller::Pids => {
-                    if let Some(value) = resources.pids {
-                        fs::write(path.join("pids.max"), value.to_string())?;
-                    }
+                    fs::write(
+                        path.join("pids.max"),
+                        resources
+                            .pids
+                            .map_or_else(|| "max".to_owned(), |value| value.to_string()),
+                    )?;
                 }
             }
-            paths.push(path);
         }
         fs::create_dir_all(workdir)?;
-        Ok(Self {
-            paths,
-            unified: false,
-        })
+        Ok(cgroup)
     }
 
     pub fn attach(&self, pid: i32) -> Result<()> {
@@ -90,20 +101,32 @@ impl Cgroup {
     }
 
     pub fn remove(&mut self) -> Result<()> {
+        let mut first_error = None;
         for path in self.paths.drain(..) {
             match fs::remove_dir(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
             }
         }
-        Ok(())
+        first_error.map_or(Ok(()), |error| Err(error.into()))
     }
 
     #[must_use]
     pub fn unified(&self) -> bool {
         self.unified
     }
+}
+
+fn write_limit(path: &Path, value: Option<String>, unlimited: &str) -> Result<()> {
+    if let Some(value) = value {
+        fs::write(path, value)?;
+    } else if path.exists() {
+        fs::write(path, unlimited)?;
+    }
+    Ok(())
 }
 
 fn cgroup_required(resources: &ResourceConfig, required: bool) -> bool {
@@ -294,7 +317,10 @@ impl Drop for Cgroup {
 
 #[cfg(test)]
 mod tests {
-    use super::{Controller, cgroup_required, parse_cgroup1_roots, requested_controllers};
+    use super::{
+        Cgroup, Controller, cgroup_required, parse_cgroup1_roots, requested_controllers,
+        write_limit,
+    };
     use kurumi_containerd_config::ResourceConfig;
     use procfs::process::MountInfo;
     use std::path::PathBuf;
@@ -335,5 +361,33 @@ mod tests {
             roots.get(&Controller::Pids),
             Some(&PathBuf::from("/sys/fs/cgroup/pids"))
         );
+    }
+
+    #[test]
+    fn resets_removed_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("memory.max");
+        std::fs::write(&path, "1048576").unwrap();
+
+        write_limit(&path, None, "max").unwrap();
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "max");
+    }
+
+    #[test]
+    fn cleanup_continues_after_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocked = directory.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("file"), "content").unwrap();
+        let removable = directory.path().join("removable");
+        std::fs::create_dir(&removable).unwrap();
+        let mut cgroup = Cgroup {
+            paths: vec![blocked, removable.clone()],
+            unified: false,
+        };
+
+        assert!(cgroup.remove().is_err());
+        assert!(!removable.exists());
     }
 }

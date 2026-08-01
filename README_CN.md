@@ -22,7 +22,7 @@ Linux namespace、挂载、cgroup、网络及持久化 TOML 配置管理轻量�
 - 后台 monitor 与前台 PTY 控制台
 - 无需外部 `nsenter` 的容器进入和命令执行
 - 防 PID 复用的持久化运行状态
-- capability 收敛、seccomp 过滤和只读内核视图
+- seccomp 过滤和只读内核视图
 - 不依赖 Android App 的可选 Android 主机集成
 
 ## 环境要求
