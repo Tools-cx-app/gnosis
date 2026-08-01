@@ -19,6 +19,7 @@
 - Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --locked` for a full local check.
 - Run one package with `cargo test -p kurumi-containerd-config` or one test by substring, for example `cargo test -p kurumi-containerd-runtime configured_environment_overrides_session_environment`.
 - CI does locked release cross-builds only. Match it with `cargo build --workspace --release --locked --target <linux-target>` or `cargo ndk --platform 21 --target <android-abi> build --workspace --release --locked`; Android ABIs are listed in `.github/workflows/ci.yml`.
+- Only changes that touch `kurumi-containerd-helper` must preserve the ABI rules above and compile successfully for every affected Linux target and Android ABI in `.github/workflows/ci.yml`; changes outside that crate do not require ABI verification. A successful host-only build is not sufficient verification for helper changes.
 - Unit tests exercise pure logic and lightweight host primitives. Lifecycle, namespace, mount, cgroup, networking, and Android integration need a suitable privileged host; use `sudo cargo run --release -p kurumi-containerd -- check` before manual runtime testing.
 
 ## Runtime constraints
