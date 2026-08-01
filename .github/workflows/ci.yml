@@ -40,7 +40,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,7 +48,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cargo-ndk
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.4
         with:
           tool: cargo-ndk
 
@@ -61,7 +61,7 @@ jobs:
         run: cargo ndk --platform 21 --target ${{ matrix.abi }} build --workspace --release --locked
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kurumi-containerd-android-${{ matrix.abi }}
           path: target/${{ matrix.target }}/release/kurumi-containerd
@@ -83,7 +83,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -103,7 +103,7 @@ jobs:
         run: cargo build --workspace --release --locked --target ${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kurumi-containerd-linux-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/kurumi-containerd
