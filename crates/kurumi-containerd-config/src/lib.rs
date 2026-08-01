@@ -37,6 +37,52 @@ mod tests {
     }
 
     #[test]
+    fn loads_missing_directory_for_install() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("container.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+        )
+        .unwrap();
+
+        let config = Config::load_for_install(&path).unwrap();
+        assert_eq!(config.container.rootfs, Some(dir.path().join("rootfs")));
+        assert!(Config::load(&path).is_err());
+    }
+
+    #[test]
+    fn loads_missing_image_for_install() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("container.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs_image = 'rootfs.img'\n",
+        )
+        .unwrap();
+
+        let config = Config::load_for_install(&path).unwrap();
+        assert_eq!(
+            config.container.rootfs_image,
+            Some(dir.path().join("rootfs.img"))
+        );
+        assert!(Config::load(&path).is_err());
+    }
+
+    #[test]
+    fn install_target_rejects_parent_traversal() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("container.toml");
+        fs::write(
+            &path,
+            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = '../rootfs'\n",
+        )
+        .unwrap();
+
+        assert!(Config::load_for_install(&path).is_err());
+    }
+
+    #[test]
     fn rejects_parent_bind_target() {
         assert!(!safe_container_path(Path::new("/opt/../etc")));
     }

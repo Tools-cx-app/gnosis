@@ -17,6 +17,7 @@ anyhow = "1.0"
 bitflags = "2.9"
 clap = { version = "4.5", features = ["derive", "env"] }
 fs2 = "0.4"
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 kurumi-containerd-helper = { path = "crates/kurumi-containerd-helper" }
 libc = "0.2"
 mio = { version = "1.0", features = ["os-poll", "os-ext"] }
@@ -24,11 +25,15 @@ procfs = { version = "0.18", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.20"
+tar = "0.4"
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.17", features = ["v4", "serde"] }
 which = "8.0.5"
+xz2 = "0.1"
+zip = { version = "4.3", default-features = false, features = ["deflate"] }
+zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

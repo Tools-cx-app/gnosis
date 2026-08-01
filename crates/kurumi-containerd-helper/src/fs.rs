@@ -1,11 +1,17 @@
 use std::{
     ffi::CString,
+    fs::{File, OpenOptions},
     io,
-    os::fd::{AsRawFd, BorrowedFd},
-    path::Path,
+    os::{
+        fd::{AsFd, AsRawFd, BorrowedFd},
+        unix::fs::OpenOptionsExt,
+    },
+    path::{Path, PathBuf},
 };
 
 use crate::syscall::{cvt, path_cstring};
+
+const LOOP_ATTACH_ATTEMPTS: usize = 8;
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -105,6 +111,87 @@ const LOOP_SET_STATUS64: libc::Ioctl = 0x4c04;
 const LOOP_CTL_GET_FREE: libc::Ioctl = 0x4c82;
 const LO_FLAGS_AUTOCLEAR: u32 = 4;
 
+pub struct LoopController {
+    file: File,
+}
+
+impl LoopController {
+    pub fn open() -> io::Result<Self> {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open("/dev/loop-control")
+            .map(|file| Self { file })
+    }
+
+    pub fn attach(&self, backing_path: &Path) -> io::Result<LoopDevice> {
+        for _ in 0..LOOP_ATTACH_ATTEMPTS {
+            let index = loop_control_get_free(self.file.as_fd())?;
+            let path = [
+                PathBuf::from(format!("/dev/loop{index}")),
+                PathBuf::from(format!("/dev/block/loop{index}")),
+            ]
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "loop device node is unavailable")
+            })?;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_CLOEXEC)
+                .open(&path)?;
+            let backing = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+                .open(backing_path)?;
+            match configure_loop_device(file.as_fd(), backing.as_fd(), backing_path) {
+                Ok(()) => {
+                    return Ok(LoopDevice {
+                        file,
+                        path,
+                        attached: true,
+                    });
+                }
+                Err(error) => {
+                    if error.raw_os_error() != Some(libc::EBUSY) {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        Err(io::Error::from_raw_os_error(libc::EBUSY))
+    }
+}
+
+pub struct LoopDevice {
+    file: File,
+    path: PathBuf,
+    attached: bool,
+}
+
+impl LoopDevice {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn clear(&mut self) -> io::Result<()> {
+        if self.attached {
+            clear_loop_device(self.file.as_fd())?;
+            self.attached = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for LoopDevice {
+    fn drop(&mut self) {
+        let _ = self.clear();
+    }
+}
+
 pub fn loop_control_get_free(fd: BorrowedFd<'_>) -> io::Result<i32> {
     // SAFETY: LOOP_CTL_GET_FREE takes no variadic argument and fd remains live.
     let result = unsafe { libc::ioctl(fd.as_raw_fd(), LOOP_CTL_GET_FREE) };
@@ -156,9 +243,54 @@ pub fn clear_loop_device(fd: BorrowedFd<'_>) -> io::Result<()> {
     cvt(unsafe { libc::ioctl(fd.as_raw_fd(), LOOP_CLR_FD) }).map(drop)
 }
 
+pub fn rename_exchange(left: &Path, right: &Path) -> io::Result<()> {
+    let left = path_cstring(left)?;
+    let right = path_cstring(right)?;
+    // SAFETY: both paths are live NUL-terminated strings and flags is valid for renameat2.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            left.as_ptr(),
+            libc::AT_FDCWD,
+            right.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+pub fn sync_filesystem(fd: BorrowedFd<'_>) -> io::Result<()> {
+    // SAFETY: fd remains live for the duration of syncfs.
+    cvt(unsafe { libc::syncfs(fd.as_raw_fd()) }).map(drop)
+}
+
 pub fn set_file_mode(fd: BorrowedFd<'_>, mode: u32) -> io::Result<()> {
     let mode = libc::mode_t::try_from(mode)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file mode exceeds mode_t"))?;
     // SAFETY: fd remains live and mode has the target's exact mode_t type.
     cvt(unsafe { libc::fchmod(fd.as_raw_fd(), mode) }).map(drop)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    #[test]
+    fn exchanges_paths_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let left = directory.path().join("left");
+        let right = directory.path().join("right");
+        fs::write(&left, "left").unwrap();
+        fs::write(&right, "right").unwrap();
+
+        super::rename_exchange(&left, &right).unwrap();
+
+        assert_eq!(fs::read_to_string(left).unwrap(), "right");
+        assert_eq!(fs::read_to_string(right).unwrap(), "left");
+    }
 }

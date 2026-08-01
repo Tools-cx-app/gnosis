@@ -17,12 +17,27 @@ impl Config {
     /// Returns an error when the file cannot be read or parsed, a host path
     /// cannot be resolved, or a configuration invariant is violated.
     pub fn load(path: &Path) -> Result<Self> {
+        Self::load_with(path, false)
+    }
+
+    /// Loads configuration for installing a rootfs into a target that may not
+    /// exist yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configuration is invalid or a target parent
+    /// cannot be resolved.
+    pub fn load_for_install(path: &Path) -> Result<Self> {
+        Self::load_with(path, true)
+    }
+
+    fn load_with(path: &Path, installing: bool) -> Result<Self> {
         let source = fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
         let mut config: Self = toml::from_str(&source)
             .with_context(|| format!("failed to parse TOML config {}", path.display()))?;
-        config.resolve_paths(path)?;
-        config.validate()?;
+        config.resolve_paths(path, installing)?;
+        config.validate_inner(!installing)?;
         Ok(config)
     }
 
@@ -63,17 +78,25 @@ impl Config {
         Ok(config)
     }
 
-    fn resolve_paths(&mut self, config_path: &Path) -> Result<()> {
+    fn resolve_paths(&mut self, config_path: &Path, installing: bool) -> Result<()> {
         let base = config_path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         self.runtime.workdir = absolute_workdir(base, &self.runtime.workdir)?;
         if let Some(rootfs) = &mut self.container.rootfs {
-            *rootfs = absolute_from(base, rootfs)?;
+            *rootfs = if installing {
+                absolute_install_target(base, rootfs)?
+            } else {
+                absolute_from(base, rootfs)?
+            };
         }
         if let Some(image) = &mut self.container.rootfs_image {
-            *image = absolute_from(base, image)?;
+            *image = if installing {
+                absolute_install_target(base, image)?
+            } else {
+                absolute_from(base, image)?
+            };
         }
         for mount in &mut self.container.mounts {
             mount.source = absolute_from(base, &mount.source)?;
@@ -97,6 +120,11 @@ impl Config {
     /// invalid networking values, or malformed environment keys.
     #[allow(clippy::too_many_lines)]
     pub fn validate(&mut self) -> Result<()> {
+        self.validate_inner(true)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn validate_inner(&mut self, require_rootfs: bool) -> Result<()> {
         ensure!(
             valid_name(&self.container.name),
             "container name may contain only ASCII letters, digits, '.', '_' and '-'"
@@ -109,7 +137,7 @@ impl Config {
             self.container.rootfs.is_some() ^ self.container.rootfs_image.is_some(),
             "configure exactly one of container.rootfs or container.rootfs_image"
         );
-        if let Some(rootfs) = &self.container.rootfs {
+        if require_rootfs && let Some(rootfs) = &self.container.rootfs {
             ensure!(
                 rootfs.is_absolute(),
                 "container.rootfs must resolve to an absolute path"
@@ -120,7 +148,7 @@ impl Config {
                 rootfs.display()
             );
         }
-        if let Some(image) = &self.container.rootfs_image {
+        if require_rootfs && let Some(image) = &self.container.rootfs_image {
             ensure!(
                 image.is_absolute(),
                 "container.rootfs_image must resolve to an absolute path"
@@ -215,7 +243,7 @@ impl Config {
                 "pids must be between 1 and 4194304"
             );
         }
-        if let Some(rootfs) = &self.container.rootfs {
+        if require_rootfs && let Some(rootfs) = &self.container.rootfs {
             let init = rootfs.join(strip_root(&self.container.init));
             ensure!(
                 init.exists(),
@@ -307,6 +335,30 @@ fn absolute_from(base: &Path, path: &Path) -> Result<PathBuf> {
     joined
         .canonicalize()
         .with_context(|| format!("failed to resolve path {}", joined.display()))
+}
+
+fn absolute_install_target(base: &Path, path: &Path) -> Result<PathBuf> {
+    ensure!(
+        !path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir)),
+        "install target cannot contain '..': {}",
+        path.display()
+    );
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    };
+    let name = joined
+        .file_name()
+        .context("install target must name a rootfs directory or image")?;
+    let parent = joined
+        .parent()
+        .context("install target has no parent directory")?
+        .canonicalize()
+        .with_context(|| format!("failed to resolve install parent for {}", joined.display()))?;
+    Ok(parent.join(name))
 }
 
 fn absolute_workdir(base: &Path, path: &Path) -> Result<PathBuf> {

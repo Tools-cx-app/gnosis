@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use kurumi_containerd_config::Config;
 use kurumi_containerd_helper::{ForkResult, NamespaceFlags, WaitStatus, fork, unshare, waitpid};
@@ -30,6 +30,17 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Install a local rootfs archive into the configured target.
+    Install {
+        /// Local tar or ZIP rootfs archive.
+        archive: PathBuf,
+        /// Sparse ext4 image size, required only for `rootfs_image` targets.
+        #[arg(long, value_parser = parse_size)]
+        size: Option<u64>,
+        /// Atomically replace an existing rootfs target.
+        #[arg(long)]
+        force: bool,
+    },
     /// Start the configured container.
     Start {
         /// Attach the container console to this terminal.
@@ -82,6 +93,24 @@ fn main() -> Result<()> {
     if matches!(cli.command, Commands::Check) {
         return check();
     }
+    if let Commands::Install {
+        archive,
+        size,
+        force,
+    } = &cli.command
+    {
+        let config = Config::load_for_install(&cli.config)?;
+        let target = config
+            .container
+            .rootfs
+            .as_ref()
+            .or(config.container.rootfs_image.as_ref())
+            .context("rootfs target is not configured")?
+            .clone();
+        Runtime::new(config).install(archive, *size, *force)?;
+        tracing::info!(archive = %archive.display(), rootfs = %target.display(), "rootfs installed");
+        return Ok(());
+    }
     let config = Config::load_persistent(&cli.config)?;
     let container_name = config.container.name.clone();
     let runtime = Runtime::new(config);
@@ -108,8 +137,33 @@ fn main() -> Result<()> {
             log_recovered(&states);
         }
         Commands::Check => unreachable!("check is handled before loading configuration"),
+        Commands::Install { .. } => unreachable!("install is handled before loading configuration"),
     }
     Ok(())
+}
+
+fn parse_size(value: &str) -> Result<u64, String> {
+    let split = value
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (number, unit) = value.split_at(split);
+    let number = number
+        .parse::<u64>()
+        .map_err(|_| "size must begin with a positive integer".to_owned())?;
+    if number == 0 {
+        return Err("size must be greater than zero".to_owned());
+    }
+    let multiplier = match unit.to_ascii_lowercase().as_str() {
+        "" => 1,
+        "k" | "kb" | "kib" => 1024,
+        "m" | "mb" | "mib" => 1024_u64.pow(2),
+        "g" | "gb" | "gib" => 1024_u64.pow(3),
+        "t" | "tb" | "tib" => 1024_u64.pow(4),
+        _ => return Err(format!("unsupported size unit: {unit}")),
+    };
+    number
+        .checked_mul(multiplier)
+        .ok_or_else(|| "size is too large".to_owned())
 }
 
 fn check() -> Result<()> {
@@ -261,5 +315,37 @@ mod tests {
             cli.command,
             Commands::Run { command } if command == ["sh", "-c", "true"]
         ));
+    }
+
+    #[test]
+    fn install_parses_local_archive_options() {
+        let cli = Cli::try_parse_from([
+            "kurumi-containerd",
+            "install",
+            "rootfs.tar.zst",
+            "--size",
+            "8G",
+            "--force",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Install { archive, size: Some(size), force: true }
+                if archive == Path::new("rootfs.tar.zst") && size == 8 * 1024_u64.pow(3)
+        ));
+    }
+
+    #[test]
+    fn parses_binary_sizes() {
+        assert_eq!(parse_size("512M").unwrap(), 512 * 1024_u64.pow(2));
+        assert_eq!(parse_size("8G").unwrap(), 8 * 1024_u64.pow(3));
+        assert_eq!(parse_size("16GiB").unwrap(), 16 * 1024_u64.pow(3));
+    }
+
+    #[test]
+    fn rejects_invalid_sizes() {
+        for value in ["0", "-1G", "1PB", "18446744073709551615T"] {
+            assert!(parse_size(value).is_err(), "accepted {value}");
+        }
     }
 }

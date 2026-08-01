@@ -1,8 +1,10 @@
 use std::{
+    collections::VecDeque,
+    ffi::OsString,
     fs::{self, OpenOptions},
     io::Write,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Result, bail};
@@ -29,9 +31,9 @@ impl Init {
             .path
             .strip_prefix("/")
             .map_err(|_| anyhow::anyhow!("container.init must be an absolute path"))?;
-        let init = rootfs.join(relative);
+        let init = resolve_inside_rootfs(rootfs, relative)?;
         let metadata = init
-            .metadata()
+            .symlink_metadata()
             .map_err(|error| anyhow::anyhow!("init does not exist: {}: {error}", init.display()))?;
         if !metadata.is_file() {
             bail!("init is not a regular file: {}", init.display());
@@ -45,6 +47,61 @@ impl Init {
     pub(crate) fn detect(&self, rootfs: &Path) -> InitSystem {
         detect(rootfs, &self.path)
     }
+}
+
+fn resolve_inside_rootfs(rootfs: &Path, path: &Path) -> Result<PathBuf> {
+    enum Part {
+        Root,
+        Parent,
+        Normal(OsString),
+    }
+
+    fn parts(path: &Path) -> Result<VecDeque<Part>> {
+        path.components()
+            .map(|component| match component {
+                Component::Normal(component) => Ok(Part::Normal(component.to_os_string())),
+                Component::CurDir => Ok(Part::Normal(OsString::new())),
+                Component::ParentDir => Ok(Part::Parent),
+                Component::RootDir => Ok(Part::Root),
+                Component::Prefix(_) => bail!("unsupported init path prefix"),
+            })
+            .collect()
+    }
+
+    let mut pending = parts(path)?;
+    let mut relative = PathBuf::new();
+    let mut links = 0;
+    while let Some(component) = pending.pop_front() {
+        match component {
+            Part::Normal(component) if !component.is_empty() => relative.push(component),
+            Part::Normal(_) => {}
+            Part::Parent => {
+                if !relative.pop() {
+                    bail!("init path escapes rootfs");
+                }
+            }
+            Part::Root => relative.clear(),
+        }
+        let candidate = rootfs.join(&relative);
+        if candidate
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            links += 1;
+            if links > 40 {
+                bail!("too many symbolic links in init path");
+            }
+            let target = fs::read_link(&candidate)?;
+            relative.pop();
+            if target.is_absolute() {
+                relative.clear();
+            }
+            for component in parts(&target)?.into_iter().rev() {
+                pending.push_front(component);
+            }
+        }
+    }
+    Ok(rootfs.join(relative))
 }
 
 pub(crate) fn prepare_runtime(system: InitSystem) -> Result<()> {
@@ -305,6 +362,37 @@ mod tests {
         )
         .unwrap();
         assert!(init.prepare(root.path()).is_ok());
+    }
+
+    #[test]
+    fn validates_init_symlinks_inside_rootfs() {
+        let root = tempfile::tempdir().unwrap();
+        create(root.path(), "usr/lib/systemd/systemd", b"init");
+        fs::set_permissions(
+            root.path().join("usr/lib/systemd/systemd"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("sbin")).unwrap();
+        std::os::unix::fs::symlink("/usr/lib/systemd/systemd", root.path().join("sbin/init"))
+            .unwrap();
+        let init = Init {
+            path: PathBuf::from("/sbin/init"),
+        };
+
+        assert!(init.prepare(root.path()).is_ok());
+    }
+
+    #[test]
+    fn rejects_init_symlink_outside_rootfs() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("sbin")).unwrap();
+        std::os::unix::fs::symlink("../../../bin/sh", root.path().join("sbin/init")).unwrap();
+        let init = Init {
+            path: PathBuf::from("/sbin/init"),
+        };
+
+        assert!(init.prepare(root.path()).is_err());
     }
 
     #[test]

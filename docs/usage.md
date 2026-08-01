@@ -17,6 +17,37 @@ load a configuration.
 Most operations require root because they create namespaces, mounts, devices,
 cgroups, and network interfaces.
 
+## Install a local rootfs
+
+`install` accepts only a local archive. It never downloads a rootfs or accepts
+a registry or URL source. Supported content formats are tar, gzip-compressed
+tar, XZ-compressed tar, Zstandard-compressed tar, and ZIP. The format is
+detected from the file header rather than its name or extension.
+
+For a configured directory target:
+
+```bash
+sudo kurumi-containerd --config debian.toml install ./debian-rootfs.tar.zst
+```
+
+For `container.rootfs_image`, provide the logical size of the new sparse ext4
+image. Binary suffixes such as `M`, `G`, `MiB`, and `GiB` are accepted:
+
+```bash
+sudo kurumi-containerd --config debian-image.toml install ./debian-rootfs.tar.zst --size 8G
+```
+
+An existing target is rejected unless `--force` is supplied. Replacement is
+staged and renamed only after extraction and init validation complete. The
+container must be stopped. Image installation additionally requires
+`mke2fs` or `mkfs.ext4`, loop devices, and mount privileges.
+
+Archive paths are installed directly at the rootfs top level, so `sbin/init`
+must not be wrapped in an extra distribution directory. ZIP cannot preserve
+UID/GID and device nodes reliably; tar is recommended for system rootfs
+archives. `--size` is required for image targets and rejected for directory
+targets.
+
 ## Lifecycle
 
 ```bash

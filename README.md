@@ -17,6 +17,7 @@ resources when compiled for and executed on Android.
 ## Features
 
 - Directory, ext4 image, btrfs image, and block-device root filesystems
+- Local tar/ZIP rootfs installation into directories or sparse ext4 images
 - Mount, PID, UTS, IPC, and optional network namespaces
 - Host, isolated, NAT, and existing-bridge networking
 - cgroup v1 and v2 memory, CPU, and process limits
@@ -57,6 +58,7 @@ Create a configuration from the example and update the rootfs path:
 ```bash
 cp kurumi-containerd.example.toml kurumi-containerd.toml
 $EDITOR kurumi-containerd.toml
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml install ./rootfs.tar.zst
 sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml start
 sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml info
 sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml enter
@@ -70,6 +72,8 @@ file, not from the current working directory.
 ## Commands
 
 ```text
+install ARCHIVE [--size SIZE] [--force]
+                        Install a local rootfs archive
 start [--foreground]   Start the configured container
 stop                   Gracefully stop it
 restart [--foreground] Stop and start it

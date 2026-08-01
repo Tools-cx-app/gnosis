@@ -36,6 +36,10 @@ Configure exactly one of `rootfs` or `rootfs_image`. A missing `uuid` is
 generated on first use and atomically written back to the TOML file.
 `volatile = true` places writable OverlayFS layers on tmpfs.
 
+The `install` command creates a missing `rootfs` directory from a local
+archive. When `rootfs_image` is configured, `install --size SIZE` creates a
+sparse ext4 image at that path. Existing targets require `--force`.
+
 Names may contain ASCII letters, digits, `.`, `_`, and `-`. The values
 `.` and `..` are rejected.
 

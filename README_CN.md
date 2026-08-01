@@ -14,6 +14,7 @@ Linux namespace、挂载、cgroup、网络及持久化 TOML 配置管理轻量�
 ## 主要能力
 
 - 目录、ext4 镜像、btrfs 镜像和块设备 rootfs
+- 从本地 tar/ZIP 归档安装目录 rootfs 或稀疏 ext4 镜像
 - Mount、PID、UTS、IPC 以及可选的 Network namespace
 - Host、隔离、NAT 和已有网桥网络模式
 - cgroup v1/v2 内存、CPU 和进程数限制
@@ -52,6 +53,7 @@ cargo build --release
 ```bash
 cp kurumi-containerd.example.toml kurumi-containerd.toml
 $EDITOR kurumi-containerd.toml
+sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml install ./rootfs.tar.zst
 sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml start
 sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml info
 sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml enter
@@ -65,6 +67,8 @@ sudo ./target/release/kurumi-containerd --config kurumi-containerd.toml stop
 ## 命令
 
 ```text
+install ARCHIVE [--size SIZE] [--force]
+                        从本地归档安装 rootfs
 start [--foreground]   启动配置中的容器
 stop                   优雅停止容器
 restart [--foreground] 重启容器

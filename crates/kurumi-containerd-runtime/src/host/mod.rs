@@ -2,6 +2,7 @@
 
 #[cfg(target_os = "android")]
 pub(crate) mod android;
+pub(crate) mod archive;
 pub(crate) mod cgroup;
 pub(crate) mod network;
 pub(crate) mod process;
