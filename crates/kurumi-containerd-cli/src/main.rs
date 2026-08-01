@@ -22,7 +22,7 @@ struct Cli {
     )]
     config: PathBuf,
     /// Logger verbose
-    #[arg(short, long, default_value = "true")]
+    #[arg(short, long, default_value = "false")]
     verbose: bool,
     #[command(subcommand)]
     command: Commands,
