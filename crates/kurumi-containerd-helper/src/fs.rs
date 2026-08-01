@@ -265,8 +265,13 @@ pub fn rename_exchange(left: &Path, right: &Path) -> io::Result<()> {
 }
 
 pub fn sync_filesystem(fd: BorrowedFd<'_>) -> io::Result<()> {
-    // SAFETY: fd remains live for the duration of syncfs.
-    cvt(unsafe { libc::syncfs(fd.as_raw_fd()) }).map(drop)
+    // SAFETY: SYS_syncfs accepts one live file descriptor and does not retain it.
+    let result = unsafe { libc::syscall(libc::SYS_syncfs, fd.as_raw_fd()) };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 pub fn set_file_mode(fd: BorrowedFd<'_>, mode: u32) -> io::Result<()> {
