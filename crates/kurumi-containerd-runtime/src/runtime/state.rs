@@ -732,13 +732,9 @@ mod tests {
 
     #[test]
     fn reports_inactive_container_without_state() {
-        let directory = tempfile::tempdir().unwrap();
-        let source = format!(
-            "[runtime]\nworkdir = {:?}\n\n[container]\nname = \"test\"\nrootfs = \"/rootfs\"\n",
-            directory.path()
-        );
-        let config: kurumi_containerd_config::Config = toml::from_str(&source).unwrap();
-        let info = Runtime::new(config).info().unwrap();
+        let source = "[runtime]\n\n[container]\nname = \"test\"\nrootfs = \"/rootfs\"\n";
+        let config: kurumi_containerd_config::Config = toml::from_str(source).unwrap();
+        let info = Runtime::new(config).unwrap().info().unwrap();
 
         assert!(!info.active);
         assert_eq!(info.name, "test");

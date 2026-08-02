@@ -182,7 +182,7 @@ mod tests {
         let path = dir.path().join("kurumi-containerd.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir='state'\n[container]\nname='test'\nrootfs='rootfs'\n[container.environment]\nMY_KEY='my-value'\n",
+            "[runtime]\n[container]\nname='test'\nrootfs='rootfs'\n[container.environment]\nMY_KEY='my-value'\n",
         )
         .unwrap();
 

@@ -128,7 +128,6 @@ impl Config {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        self.runtime.workdir = absolute_workdir(base, &self.runtime.workdir)?;
         if let Some(rootfs) = &mut self.container.rootfs {
             *rootfs = if installing {
                 absolute_install_target(base, rootfs)?
@@ -173,10 +172,6 @@ impl Config {
         ensure!(
             valid_name(&self.container.name),
             "container name may contain only ASCII letters, digits, '.', '_' and '-'"
-        );
-        ensure!(
-            self.runtime.workdir.is_absolute(),
-            "runtime.workdir must resolve to an absolute path"
         );
         ensure!(
             self.container.rootfs.is_some() ^ self.container.rootfs_image.is_some(),
@@ -404,16 +399,6 @@ fn absolute_install_target(base: &Path, path: &Path) -> Result<PathBuf> {
         .canonicalize()
         .with_context(|| format!("failed to resolve install parent for {}", joined.display()))?;
     Ok(parent.join(name))
-}
-
-fn absolute_workdir(base: &Path, path: &Path) -> Result<PathBuf> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    let base = base
-        .canonicalize()
-        .with_context(|| format!("failed to resolve config directory {}", base.display()))?;
-    Ok(base.join(path))
 }
 
 pub(crate) fn strip_root(path: &Path) -> &Path {

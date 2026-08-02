@@ -76,7 +76,7 @@ enter [USER]           进入交互式登录，默认用户为 root
 run COMMAND...          执行非交互命令
 info                    显示运行状态和资源使用情况
 pid                     输出容器 init PID
-show                    列出同一 workdir 中的容器
+show                    列出运行时目录中的容器
 scan                    验证运行进程并恢复缺失状态
 check                   检查主机能力
 ```

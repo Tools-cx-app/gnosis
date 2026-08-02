@@ -13,8 +13,6 @@ pub struct Config {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
-    /// Host directory for state, PID files, logs, and transient data.
-    pub workdir: PathBuf,
     #[serde(default = "default_stop_timeout")]
     pub stop_timeout_seconds: u64,
 }

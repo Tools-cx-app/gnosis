@@ -1,7 +1,4 @@
 [runtime]
-# Required and intentionally has no built-in default. Relative paths are
-# resolved from this TOML file, not from the process working directory.
-workdir = "./var/kurumi-containerd"
 stop_timeout_seconds = 15
 
 [container]

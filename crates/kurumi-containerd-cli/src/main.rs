@@ -107,13 +107,13 @@ fn main() -> Result<()> {
             .or(config.container.rootfs_image.as_ref())
             .context("rootfs target is not configured")?
             .clone();
-        Runtime::new(config).install(archive, *size, *force)?;
+        Runtime::new(config)?.install(archive, *size, *force)?;
         tracing::info!(archive = %archive.display(), rootfs = %target.display(), "rootfs installed");
         return Ok(());
     }
     let config = Config::load_persistent(&cli.config)?;
     let container_name = config.container.name.clone();
-    let runtime = Runtime::new(config);
+    let runtime = Runtime::new(config)?;
     match cli.command {
         Commands::Start { foreground } => {
             let state = runtime.start(foreground)?;

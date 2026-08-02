@@ -440,7 +440,7 @@ mod tests {
 
     fn test_config() -> Config {
         toml::from_str(
-            "[runtime]\nworkdir = '/tmp/kurumi-containerd'\n\n[container]\nname = 'test'\nrootfs = '/tmp'\n\n[container.network_options]\ndns = ['1.1.1.1']\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = '/tmp'\n\n[container.network_options]\ndns = ['1.1.1.1']\n",
         )
         .unwrap()
     }

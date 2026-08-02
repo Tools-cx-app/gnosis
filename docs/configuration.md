@@ -11,13 +11,12 @@ container.
 
 ```toml
 [runtime]
-workdir = "./var/kurumi-containerd"
 stop_timeout_seconds = 15
 ```
 
-`workdir` is required and stores locks, live state, recovery data, and other
-runtime-owned files. It must be root-owned, must not be group/world writable,
-and must not be a symlink. There is deliberately no system-wide default.
+Runtime-owned files are stored in `/run/kurumi-containerd` on Linux and
+`$TMP/kurumi-containerd` on Android. The directory must be root-owned, must not
+be group/world writable, and must not be a symlink.
 
 ## Container
 

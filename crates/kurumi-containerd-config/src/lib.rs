@@ -25,15 +25,19 @@ mod tests {
         fs::write(dir.path().join("rootfs/sbin/init"), "").unwrap();
         fs::write(
             dir.path().join("container.toml"),
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test-1'\nrootfs = 'rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test-1'\nrootfs = 'rootfs'\n",
         )
         .unwrap();
 
         let config = Config::load(&dir.path().join("container.toml")).unwrap();
-        assert_eq!(config.runtime.workdir, dir.path().join("state"));
-        assert!(!config.runtime.workdir.exists());
         assert_eq!(config.container.hostname, "test-1");
         assert_eq!(config.container.rootfs, Some(dir.path().join("rootfs")));
+    }
+
+    #[test]
+    fn rejects_removed_workdir_setting() {
+        let source = "[runtime]\nworkdir = '/tmp'\n[container]\nname = 'test'\nrootfs = '/tmp'\n";
+        assert!(toml::from_str::<Config>(source).is_err());
     }
 
     #[test]
@@ -42,7 +46,7 @@ mod tests {
         let path = dir.path().join("container.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
         )
         .unwrap();
 
@@ -57,7 +61,7 @@ mod tests {
         let path = dir.path().join("container.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs_image = 'rootfs.img'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs_image = 'rootfs.img'\n",
         )
         .unwrap();
 
@@ -75,7 +79,7 @@ mod tests {
         let path = dir.path().join("container.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = '../rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = '../rootfs'\n",
         )
         .unwrap();
 
@@ -102,7 +106,7 @@ mod tests {
         let path = dir.path().join("container.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
         )
         .unwrap();
 
@@ -121,7 +125,7 @@ mod tests {
         let path = dir.path().join("container.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
         )
         .unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
@@ -142,7 +146,7 @@ mod tests {
         let target = dir.path().join("container.target.toml");
         fs::write(
             &target,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
         )
         .unwrap();
         let path = dir.path().join("container.toml");
@@ -162,7 +166,7 @@ mod tests {
         let path = Arc::new(dir.path().join("container.toml"));
         fs::write(
             path.as_ref(),
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
         )
         .unwrap();
         let loads = (0..2)
@@ -203,7 +207,7 @@ mod tests {
         let path = dir.path().join("container.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\nenvironment_file = 'container.env'\n\n[container.environment]\nLANG = 'C.UTF-8'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\nenvironment_file = 'container.env'\n\n[container.environment]\nLANG = 'C.UTF-8'\n",
         )
         .unwrap();
 
@@ -289,7 +293,7 @@ mod tests {
         let path = dir.path().join("container.toml");
         fs::write(
             &path,
-            "[runtime]\nworkdir = 'state'\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
+            "[runtime]\n\n[container]\nname = 'test'\nrootfs = 'rootfs'\n",
         )
         .unwrap();
         let config = Config::load(&path).unwrap();
