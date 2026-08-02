@@ -15,12 +15,14 @@
 mod fs;
 mod process;
 mod security;
+mod signal;
 mod syscall;
 mod terminal;
 
 pub use fs::*;
 pub use process::*;
 pub use security::*;
+pub use signal::*;
 pub use terminal::*;
 
 pub const OPEN_CLOEXEC: i32 = libc::O_CLOEXEC;

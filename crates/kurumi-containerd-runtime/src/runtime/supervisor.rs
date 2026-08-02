@@ -2,11 +2,12 @@ use std::{fs::File, io, os::fd::AsFd};
 
 use anyhow::{Context, Result};
 use kurumi_containerd_helper::{
-    Signal, SignalHandler, WaitStatus, dup_stdio, is_interrupted, read, set_signal_handler, waitpid,
+    Signal, SignalActionFlags, SignalHandler, WaitStatus, dup_stdio, is_interrupted, read,
+    set_signal_handler, waitpid,
 };
 
 pub(super) fn is_reboot_status(status: WaitStatus) -> bool {
-    matches!(status, WaitStatus::Signaled(_, signal, _) if signal.raw() == Signal::Hangup as i32)
+    matches!(status, WaitStatus::Signaled(_, signal, _) if signal == Signal::Hangup.into())
 }
 
 pub(super) fn waitpid_retry(pid: i32) -> io::Result<WaitStatus> {
@@ -51,7 +52,7 @@ pub(super) fn configure_monitor_signals() -> Result<()> {
         Signal::User1,
         Signal::User2,
     ] {
-        set_signal_handler(signal, SignalHandler::Ignore, false)
+        set_signal_handler(signal, SignalHandler::Ignore, SignalActionFlags::empty())
             .with_context(|| format!("failed to ignore monitor signal {signal}"))?;
     }
     Ok(())
@@ -59,7 +60,7 @@ pub(super) fn configure_monitor_signals() -> Result<()> {
 
 pub(super) fn ignore_foreground_parent_signals() -> Result<()> {
     for signal in [Signal::Interrupt, Signal::Terminate] {
-        set_signal_handler(signal, SignalHandler::Ignore, false)
+        set_signal_handler(signal, SignalHandler::Ignore, SignalActionFlags::empty())
             .with_context(|| format!("failed to ignore foreground parent signal {signal}"))?;
     }
     Ok(())
@@ -75,7 +76,7 @@ pub(super) fn reset_init_signals() {
         Signal::User1,
         Signal::User2,
     ] {
-        let _ = set_signal_handler(signal, SignalHandler::Default, false);
+        let _ = set_signal_handler(signal, SignalHandler::Default, SignalActionFlags::empty());
     }
 }
 

@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Result, bail};
 use kurumi_containerd_config::Config;
-use kurumi_containerd_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, OPEN_NONBLOCK, Signal, realtime_min};
+use kurumi_containerd_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, OPEN_NONBLOCK, Signal, SignalNumber};
 use serde::{Deserialize, Serialize};
 
 use crate::host::process::ProcessHandle;
@@ -235,7 +235,8 @@ pub(crate) fn detect(rootfs: &Path, configured_init: &Path) -> InitSystem {
 
 pub(crate) fn request_shutdown(process: &ProcessHandle, system: InitSystem) -> Result<()> {
     match system {
-        InitSystem::Systemd => process.send_signal_raw(realtime_min() + 3),
+        InitSystem::Systemd => process
+            .send_signal(SignalNumber::realtime(3).expect("systemd shutdown signal must be valid")),
         InitSystem::Procd | InitSystem::S6 | InitSystem::Busybox => {
             process.send_signal(Signal::User2)
         }

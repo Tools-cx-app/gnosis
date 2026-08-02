@@ -6,12 +6,12 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use kurumi_containerd_helper::{
-    ForkResult, PtyPair, Signal, SignalHandler, TerminalSettings, WaitStatus, WindowSize,
-    dup_stdio, effective_uid, fork, is_interrupted, is_io_error, is_terminal, is_would_block,
-    make_raw, open_pty, pty_number, read, receive_fds, send_fds, set_controlling_terminal,
-    set_file_mode, set_gid, set_groups, set_signal_handler, set_terminal_settings,
-    set_terminal_size, set_uid, setsid, socket_pair, terminal_settings, terminal_size, waitpid,
-    write,
+    ForkResult, PtyPair, Signal, SignalActionFlags, SignalHandler, SignalNumber, TerminalSettings,
+    WaitStatus, WindowSize, dup_stdio, effective_uid, fork, is_interrupted, is_io_error,
+    is_terminal, is_would_block, make_raw, open_pty, pty_number, read, receive_fds, send_fds,
+    set_controlling_terminal, set_file_mode, set_gid, set_groups, set_signal_handler,
+    set_terminal_settings, set_terminal_size, set_uid, setsid, socket_pair, terminal_settings,
+    terminal_size, waitpid, write,
 };
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 
@@ -147,8 +147,12 @@ pub(crate) fn configure_child(slave: &OwnedFd) -> Result<()> {
 }
 
 pub(crate) fn ignore_hangup() -> Result<()> {
-    set_signal_handler(Signal::Hangup, SignalHandler::Ignore, false)
-        .context("failed to ignore interactive SIGHUP")?;
+    set_signal_handler(
+        Signal::Hangup,
+        SignalHandler::Ignore,
+        SignalActionFlags::empty(),
+    )
+    .context("failed to ignore interactive SIGHUP")?;
     Ok(())
 }
 
@@ -184,9 +188,9 @@ pub(crate) fn proxy(
     loop {
         if let Some((target, _)) = shutdown_target {
             let signal = FORWARDED_SIGNAL.swap(0, Ordering::Relaxed);
-            if signal != 0 {
+            if let Some(signal) = SignalNumber::new(signal) {
                 target
-                    .send_signal_raw(signal)
+                    .send_signal(signal)
                     .context("failed to forward foreground signal")?;
             }
         }
@@ -337,8 +341,12 @@ impl ForwardSignals {
         }
 
         for signal in [Signal::Interrupt, Signal::Terminate] {
-            set_signal_handler(signal, SignalHandler::Handler(record), true)
-                .with_context(|| format!("failed to capture foreground signal {signal}"))?;
+            set_signal_handler(
+                signal,
+                SignalHandler::Handler(record),
+                SignalActionFlags::RESTART,
+            )
+            .with_context(|| format!("failed to capture foreground signal {signal}"))?;
         }
         Ok(Self)
     }
@@ -347,7 +355,7 @@ impl ForwardSignals {
 impl Drop for ForwardSignals {
     fn drop(&mut self) {
         for signal in [Signal::Interrupt, Signal::Terminate] {
-            let _ = set_signal_handler(signal, SignalHandler::Ignore, false);
+            let _ = set_signal_handler(signal, SignalHandler::Ignore, SignalActionFlags::empty());
         }
     }
 }

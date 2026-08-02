@@ -186,7 +186,7 @@ fn command_status(status: WaitStatus) -> Result<()> {
         WaitStatus::Exited(_, 0) => Ok(()),
         WaitStatus::Exited(_, code) => bail!("command exited with status {code}"),
         WaitStatus::Signaled(_, signal, _) => {
-            bail!("command terminated by {}", signal_name(signal.raw()))
+            bail!("command terminated by {}", signal.name())
         }
         status => bail!("unexpected command status: {status:?}"),
     }
@@ -287,43 +287,6 @@ fn terminate_and_reap(child: i32) {
 fn terminate_session_and_reap(child: i32) {
     let _ = kill_process_group(child, Signal::Kill);
     terminate_and_reap(child);
-}
-
-fn signal_name(signal: i32) -> &'static str {
-    match signal {
-        1 => "SIGHUP",
-        2 => "SIGINT",
-        3 => "SIGQUIT",
-        4 => "SIGILL",
-        5 => "SIGTRAP",
-        6 => "SIGABRT",
-        7 => "SIGBUS",
-        8 => "SIGFPE",
-        9 => "SIGKILL",
-        10 => "SIGUSR1",
-        11 => "SIGSEGV",
-        12 => "SIGUSR2",
-        13 => "SIGPIPE",
-        14 => "SIGALRM",
-        15 => "SIGTERM",
-        16 => "SIGSTKFLT",
-        17 => "SIGCHLD",
-        18 => "SIGCONT",
-        19 => "SIGSTOP",
-        20 => "SIGTSTP",
-        21 => "SIGTTIN",
-        22 => "SIGTTOU",
-        23 => "SIGURG",
-        24 => "SIGXCPU",
-        25 => "SIGXFSZ",
-        26 => "SIGVTALRM",
-        27 => "SIGPROF",
-        28 => "SIGWINCH",
-        29 => "SIGIO",
-        30 => "SIGPWR",
-        31 => "SIGSYS",
-        _ => "unknown signal",
-    }
 }
 
 fn exec_failure(message: &str) -> ! {

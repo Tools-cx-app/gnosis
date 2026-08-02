@@ -5,6 +5,7 @@ use std::{
     path::Path,
 };
 
+use crate::SignalNumber;
 use crate::syscall::{cvt, cvt_long, cvt_ssize, path_cstring};
 
 bitflags::bitflags! {
@@ -25,48 +26,12 @@ impl NamespaceFlags {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(i32)]
-pub enum Signal {
-    Hangup = libc::SIGHUP,
-    Interrupt = libc::SIGINT,
-    Quit = libc::SIGQUIT,
-    Kill = libc::SIGKILL,
-    User1 = libc::SIGUSR1,
-    User2 = libc::SIGUSR2,
-    Pipe = libc::SIGPIPE,
-    Continue = libc::SIGCONT,
-    Power = libc::SIGPWR,
-    Terminate = libc::SIGTERM,
-}
-
-impl std::fmt::Display for Signal {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", *self as i32)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaitStatus {
     Exited(i32, i32),
     Signaled(i32, SignalNumber, bool),
     Stopped(i32, SignalNumber),
     Continued(i32),
     StillAlive,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SignalNumber(i32);
-
-impl SignalNumber {
-    pub const fn raw(self) -> i32 {
-        self.0
-    }
-}
-
-impl std::fmt::Display for SignalNumber {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", self.0)
-    }
 }
 
 #[derive(Debug)]
@@ -124,27 +89,17 @@ pub fn waitpid(pid: i32, nohang: bool) -> io::Result<WaitStatus> {
     } else if libc::WIFSIGNALED(status) {
         Ok(WaitStatus::Signaled(
             result,
-            SignalNumber(libc::WTERMSIG(status)),
+            SignalNumber::from_kernel(libc::WTERMSIG(status)),
             libc::WCOREDUMP(status),
         ))
     } else if libc::WIFSTOPPED(status) {
         Ok(WaitStatus::Stopped(
             result,
-            SignalNumber(libc::WSTOPSIG(status)),
+            SignalNumber::from_kernel(libc::WSTOPSIG(status)),
         ))
     } else {
         Ok(WaitStatus::Continued(result))
     }
-}
-
-pub fn kill(pid: i32, signal: Signal) -> io::Result<()> {
-    // SAFETY: kill accepts a numeric pid and signal.
-    cvt(unsafe { libc::kill(pid, signal as i32) }).map(drop)
-}
-
-pub fn kill_process_group(pid: i32, signal: Signal) -> io::Result<()> {
-    // SAFETY: a negative pid selects the process group.
-    cvt(unsafe { libc::kill(-pid, signal as i32) }).map(drop)
 }
 
 pub fn setsid() -> io::Result<i32> {
@@ -275,43 +230,6 @@ pub fn pidfd_open(pid: i32) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-pub fn pidfd_send_signal(fd: BorrowedFd<'_>, signal: i32) -> io::Result<()> {
-    // SAFETY: fd is live, siginfo is null, and flags is zero.
-    cvt_long(unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            fd.as_raw_fd(),
-            signal,
-            std::ptr::null::<libc::siginfo_t>(),
-            0,
-        )
-    })
-    .map(drop)
-}
-
-#[derive(Clone, Copy)]
-pub enum SignalHandler {
-    Default,
-    Ignore,
-    Handler(extern "C" fn(i32)),
-}
-
-pub fn set_signal_handler(signal: Signal, handler: SignalHandler, restart: bool) -> io::Result<()> {
-    // Zero initialization matches sigemptyset plus zeroed platform padding.
-    // SAFETY: sigaction is a plain C struct and zero is a valid initial mask.
-    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-    action.sa_sigaction = match handler {
-        SignalHandler::Default => libc::SIG_DFL,
-        SignalHandler::Ignore => libc::SIG_IGN,
-        SignalHandler::Handler(handler) => handler as usize,
-    };
-    action.sa_flags = if restart { libc::SA_RESTART } else { 0 };
-    // SAFETY: action is initialized and its mask is made empty.
-    cvt(unsafe { libc::sigemptyset(&mut action.sa_mask) })?;
-    // SAFETY: action remains live and contains a valid handler representation.
-    cvt(unsafe { libc::sigaction(signal as i32, &action, std::ptr::null_mut()) }).map(drop)
-}
-
 pub fn is_interrupted(error: &io::Error) -> bool {
     error.raw_os_error() == Some(libc::EINTR)
 }
@@ -322,8 +240,4 @@ pub fn is_would_block(error: &io::Error) -> bool {
 
 pub fn is_io_error(error: &io::Error) -> bool {
     error.raw_os_error() == Some(libc::EIO)
-}
-
-pub fn realtime_min() -> i32 {
-    libc::SIGRTMIN()
 }

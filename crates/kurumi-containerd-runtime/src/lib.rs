@@ -57,6 +57,7 @@ impl Runtime {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn runtime_workdir() -> Result<PathBuf> {
     #[cfg(target_os = "android")]
     {

@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kurumi_containerd_helper::{Signal, is_interrupted, pidfd_open, pidfd_send_signal};
+use kurumi_containerd_helper::{SignalNumber, is_interrupted, pidfd_open, pidfd_send_signal};
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,13 +34,9 @@ impl ProcessHandle {
         self.pid
     }
 
-    pub(crate) fn send_signal_raw(&self, signal: i32) -> Result<()> {
-        pidfd_send_signal(self.fd.as_fd(), signal)
+    pub(crate) fn send_signal(&self, signal: impl Into<SignalNumber>) -> Result<()> {
+        pidfd_send_signal(self.fd.as_fd(), signal.into())
             .with_context(|| format!("failed to signal PID {} through pidfd", self.pid.as_raw()))
-    }
-
-    pub(crate) fn send_signal(&self, signal: Signal) -> Result<()> {
-        self.send_signal_raw(signal as i32)
     }
 
     pub(crate) fn wait_for_exit(&self, timeout: Duration) -> Result<bool> {
@@ -90,7 +86,7 @@ mod tests {
     fn opens_and_probes_current_process() {
         let pid = kurumi_containerd_helper::current_pid();
         let process = ProcessHandle::open(pid).unwrap();
-        process.send_signal_raw(0).unwrap();
+        process.send_signal(SignalNumber::NONE).unwrap();
         assert_eq!(process.pid().as_raw(), pid);
         assert!(!process.wait_for_exit(Duration::ZERO).unwrap());
     }
