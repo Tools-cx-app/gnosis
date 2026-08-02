@@ -60,10 +60,10 @@ impl Runtime {
 pub(crate) fn runtime_workdir() -> Result<PathBuf> {
     #[cfg(target_os = "android")]
     {
-        let tmp = std::env::var_os("TMP")
+        let tmp = std::env::var_os("TMPDIR")
             .map(PathBuf::from)
-            .context("TMP is not set")?;
-        anyhow::ensure!(tmp.is_absolute(), "TMP must be an absolute path");
+            .context("TMPDIR is not set")?;
+        anyhow::ensure!(tmp.is_absolute(), "TMPDIR must be an absolute path");
         Ok(tmp.join("kurumi-containerd"))
     }
     #[cfg(target_os = "linux")]
