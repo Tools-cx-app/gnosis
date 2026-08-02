@@ -36,16 +36,7 @@ impl Runtime {
     ///
     /// Returns an error on Android when `TMP` is not set.
     pub fn new(config: Config) -> Result<Self> {
-        #[cfg(target_os = "android")]
-        let workdir = {
-            let tmp = std::env::var_os("TMPDIR")
-                .map(PathBuf::from)
-                .context("TMPDIR is not set")?;
-            anyhow::ensure!(tmp.is_absolute(), "TMPDIR must be an absolute path");
-            tmp.join("kurumi-containerd")
-        };
-        #[cfg(target_os = "linux")]
-        let workdir = PathBuf::from("/run/kurumi-containerd");
+        let workdir = runtime_workdir()?;
         let state_dir = workdir.join("state");
         let recovery_dir = workdir.join("recovery");
         let mount_dir = workdir.join("mounts");
@@ -63,6 +54,21 @@ impl Runtime {
             volatile_dir,
             lock_path,
         })
+    }
+}
+
+pub(crate) fn runtime_workdir() -> Result<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        let tmp = std::env::var_os("TMP")
+            .map(PathBuf::from)
+            .context("TMP is not set")?;
+        anyhow::ensure!(tmp.is_absolute(), "TMP must be an absolute path");
+        Ok(tmp.join("kurumi-containerd"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(PathBuf::from("/run/kurumi-containerd"))
     }
 }
 
