@@ -10,6 +10,8 @@ use std::{
 
 use crate::syscall::cvt;
 
+pub const OPEN_NOCTTY: i32 = libc::O_NOCTTY;
+
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct WindowSize {

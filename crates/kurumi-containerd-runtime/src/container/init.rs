@@ -9,7 +9,10 @@ use std::{
 
 use anyhow::{Result, bail};
 use kurumi_containerd_config::Config;
-use kurumi_containerd_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, OPEN_NONBLOCK, Signal, SignalNumber};
+use kurumi_containerd_helper::{
+    fs::{OPEN_CLOEXEC, OPEN_NOFOLLOW, OPEN_NONBLOCK},
+    signal::{Signal, SignalNumber},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::host::process::ProcessHandle;

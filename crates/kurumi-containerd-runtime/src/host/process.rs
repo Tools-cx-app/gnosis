@@ -4,7 +4,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use kurumi_containerd_helper::{SignalNumber, is_interrupted, pidfd_open, pidfd_send_signal};
+use kurumi_containerd_helper::{
+    process::{is_interrupted, pidfd_open},
+    signal::{SignalNumber, pidfd_send_signal},
+};
 use mio::{Events, Interest, Poll, Token, unix::SourceFd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,7 +87,7 @@ mod tests {
 
     #[test]
     fn opens_and_probes_current_process() {
-        let pid = kurumi_containerd_helper::current_pid();
+        let pid = kurumi_containerd_helper::process::current_pid();
         let process = ProcessHandle::open(pid).unwrap();
         process.send_signal(SignalNumber::NONE).unwrap();
         assert_eq!(process.pid().as_raw(), pid);

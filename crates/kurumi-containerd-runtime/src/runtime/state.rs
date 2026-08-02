@@ -9,8 +9,11 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
 #[cfg(test)]
-use kurumi_containerd_helper::parent_pid as current_parent_pid;
-use kurumi_containerd_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, effective_uid};
+use kurumi_containerd_helper::process::parent_pid as current_parent_pid;
+use kurumi_containerd_helper::{
+    fs::{OPEN_CLOEXEC, OPEN_NOFOLLOW},
+    process::effective_uid,
+};
 use procfs::process::{Process, all_processes};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use kurumi_containerd_config::ResourceConfig;
-use kurumi_containerd_helper::{MountFlags, TMPFS_MAGIC, filesystem_type, mount, unmount};
+use kurumi_containerd_helper::fs::{MountFlags, TMPFS_MAGIC, filesystem_type, mount, unmount};
 
 pub struct Cgroup {
     paths: Vec<PathBuf>,

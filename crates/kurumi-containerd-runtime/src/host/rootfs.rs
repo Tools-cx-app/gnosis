@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use kurumi_containerd_config::Config;
-use kurumi_containerd_helper::{LoopController, LoopDevice, MountFlags, mount, unmount};
+use kurumi_containerd_helper::fs::{LoopController, LoopDevice, MountFlags, mount, unmount};
 
 mod install;
 

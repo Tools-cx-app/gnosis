@@ -11,6 +11,10 @@ use std::{
 
 use crate::syscall::{cvt, path_cstring};
 
+pub const OPEN_CLOEXEC: i32 = libc::O_CLOEXEC;
+pub const OPEN_NOFOLLOW: i32 = libc::O_NOFOLLOW;
+pub const OPEN_NONBLOCK: i32 = libc::O_NONBLOCK;
+
 const LOOP_ATTACH_ATTEMPTS: usize = 8;
 
 bitflags::bitflags! {

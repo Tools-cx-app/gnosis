@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use kurumi_containerd_config::AndroidConfig;
-use kurumi_containerd_helper::{MountFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, mount};
+use kurumi_containerd_helper::fs::{MountFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, mount};
 use serde::{Deserialize, Serialize};
 
 const GPU_DIRECTORIES: &[(&str, &str)] = &[

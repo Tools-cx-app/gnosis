@@ -3,8 +3,12 @@ use std::{collections::BTreeMap, ffi::CString, fs, os::fd::AsFd, path::Path};
 use anyhow::{Context, Result, bail, ensure};
 use kurumi_containerd_config::{AndroidConfig, NetworkMode};
 use kurumi_containerd_helper::{
-    ForkResult, NamespaceFlags, Signal, WaitStatus, chdir, chroot, current_pid, execve, fchdir,
-    fork, init_groups, kill, kill_process_group, set_gid, set_uid, setns, socket_pair, waitpid,
+    process::{
+        ForkResult, NamespaceFlags, WaitStatus, chdir, chroot, current_pid, execve, fchdir, fork,
+        init_groups, set_gid, set_uid, setns, waitpid,
+    },
+    signal::{Signal, kill, kill_process_group},
+    terminal::socket_pair,
 };
 use procfs::process::Process;
 

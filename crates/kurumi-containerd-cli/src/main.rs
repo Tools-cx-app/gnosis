@@ -6,7 +6,9 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use kurumi_containerd_config::Config;
-use kurumi_containerd_helper::{ForkResult, NamespaceFlags, WaitStatus, fork, unshare, waitpid};
+use kurumi_containerd_helper::process::{
+    ForkResult, NamespaceFlags, WaitStatus, fork, unshare, waitpid,
+};
 use kurumi_containerd_runtime::{ContainerInfo, ContainerState, Runtime};
 use tracing::level_filters::LevelFilter;
 

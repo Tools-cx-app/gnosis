@@ -2,8 +2,8 @@ use std::{fs::File, io, os::fd::AsFd};
 
 use anyhow::{Context, Result};
 use kurumi_containerd_helper::{
-    Signal, SignalActionFlags, SignalHandler, WaitStatus, dup_stdio, is_interrupted, read,
-    set_signal_handler, waitpid,
+    process::{WaitStatus, dup_stdio, is_interrupted, read, waitpid},
+    signal::{Signal, SignalActionFlags, SignalHandler, set_signal_handler},
 };
 
 pub(super) fn is_reboot_status(status: WaitStatus) -> bool {
@@ -87,7 +87,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::zombie_processes)] // Reaped through kurumi_containerd_helper::waitpid below.
+    #[allow(clippy::zombie_processes)] // Reaped through helper process::waitpid below.
     fn recognizes_only_namespace_reboot_signal() {
         let child = Command::new("sh")
             .args(["-c", "kill -HUP $$"])

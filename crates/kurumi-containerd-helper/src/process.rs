@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use crate::SignalNumber;
+use crate::signal::SignalNumber;
 use crate::syscall::{cvt, cvt_long, cvt_ssize, path_cstring};
 
 bitflags::bitflags! {

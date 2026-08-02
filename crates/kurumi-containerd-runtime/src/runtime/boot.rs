@@ -6,7 +6,8 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use kurumi_containerd_helper::{
-    MountFlags, NamespaceFlags, chdir, execve, mount, pivot_root, set_hostname, unmount, unshare,
+    fs::{MountFlags, mount, unmount},
+    process::{NamespaceFlags, chdir, execve, pivot_root, set_hostname, unshare},
 };
 use uuid::Uuid;
 

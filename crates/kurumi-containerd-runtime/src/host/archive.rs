@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use flate2::read::GzDecoder;
-use kurumi_containerd_helper::{OPEN_CLOEXEC, OPEN_NOFOLLOW, effective_uid};
+use kurumi_containerd_helper::{
+    fs::{OPEN_CLOEXEC, OPEN_NOFOLLOW},
+    process::effective_uid,
+};
 use tar::Archive;
 use xz2::read::XzDecoder;
 use zip::ZipArchive;

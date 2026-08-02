@@ -76,5 +76,5 @@ pub(crate) fn runtime_workdir() -> Result<PathBuf> {
 /// Reports whether the current kernel exposes pidfd process handles.
 #[must_use]
 pub fn pidfd_available() -> bool {
-    host::process::ProcessHandle::open(kurumi_containerd_helper::current_pid()).is_ok()
+    host::process::ProcessHandle::open(kurumi_containerd_helper::process::current_pid()).is_ok()
 }

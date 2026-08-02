@@ -12,7 +12,10 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
 use kurumi_containerd_config::{Config, NetworkMode, Protocol};
-use kurumi_containerd_helper::{NamespaceFlags, OPEN_CLOEXEC, OPEN_NOFOLLOW, current_pid, setns};
+use kurumi_containerd_helper::{
+    fs::{OPEN_CLOEXEC, OPEN_NOFOLLOW},
+    process::{NamespaceFlags, current_pid, setns},
+};
 use procfs::process::Process;
 use serde::{Deserialize, Serialize};
 

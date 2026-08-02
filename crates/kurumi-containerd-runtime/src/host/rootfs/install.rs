@@ -10,8 +10,10 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use kurumi_containerd_helper::{
-    LoopController, LoopDevice, MountFlags, effective_uid, mount, rename_exchange, sync_filesystem,
-    unmount,
+    fs::{
+        LoopController, LoopDevice, MountFlags, mount, rename_exchange, sync_filesystem, unmount,
+    },
+    process::effective_uid,
 };
 use uuid::Uuid;
 
