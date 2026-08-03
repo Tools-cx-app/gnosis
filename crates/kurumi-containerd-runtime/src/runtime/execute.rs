@@ -4,8 +4,8 @@ use anyhow::{Context, Result, bail, ensure};
 use kurumi_containerd_config::{AndroidConfig, NetworkMode};
 use kurumi_containerd_helper::{
     process::{
-        ForkResult, NamespaceFlags, WaitStatus, chdir, chroot, current_pid, execve, fchdir, fork,
-        init_groups, set_gid, set_uid, setns, waitpid,
+        ForkResult, NamespaceFlags, WaitStatus, chdir, chroot, close_fds_except, current_pid,
+        execve, fchdir, fork, init_groups, set_gid, set_uid, setns, waitpid,
     },
     signal::{Signal, kill, kill_process_group},
     terminal::socket_pair,
@@ -153,6 +153,10 @@ impl Runtime {
                         result_or_exit(fchdir(&root));
                         result_or_exit(chroot("."));
                         result_or_exit(chdir("/"));
+                        // SAFETY: this is the single-threaded command child and every
+                        // subsequent path exits directly without unwinding descriptor owners.
+                        #[allow(unsafe_code)]
+                        result_or_exit(unsafe { close_fds_except(&[]) });
                         if let Some(user) = login_user {
                             exec_login(
                                 user,

@@ -1,13 +1,14 @@
 use std::{
     fs::{self, File},
     io::Read,
+    os::fd::AsFd,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use kurumi_containerd_helper::{
     fs::{MountFlags, mount, unmount},
-    process::{NamespaceFlags, chdir, execve, pivot_root, set_hostname, unshare},
+    process::{NamespaceFlags, chdir, close_fds_except, execve, pivot_root, set_hostname, unshare},
 };
 use uuid::Uuid;
 
@@ -23,7 +24,7 @@ impl Runtime {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn boot(
         &self,
-        _boot_status: &std::os::fd::OwnedFd,
+        boot_status: &std::os::fd::OwnedFd,
         network_status: std::os::fd::OwnedFd,
         configured_rootfs: &Path,
         console: Option<&terminal::Console>,
@@ -31,6 +32,11 @@ impl Runtime {
         host_cgroup_v2: bool,
         uuid: Uuid,
     ) -> Result<()> {
+        // SAFETY: this is the single-threaded init child. It exits directly on
+        // every error, so inherited descriptor owners are never used or dropped.
+        #[allow(unsafe_code)]
+        unsafe { close_fds_except(&[boot_status.as_fd(), network_status.as_fd()]) }
+            .context("failed to close inherited host descriptors")?;
         if let Some(console) = console {
             let slave = console.open_slave()?;
             terminal::configure_child(&slave)?;

@@ -141,6 +141,40 @@ pub fn dup_stdio(fd: impl AsFd) -> io::Result<()> {
     Ok(())
 }
 
+/// Closes every descriptor above stderr except those explicitly retained.
+///
+/// # Safety
+///
+/// The process must be single-threaded, and it must exit without using or
+/// dropping any Rust owner of a descriptor closed by this function.
+pub unsafe fn close_fds_except(keep: &[BorrowedFd<'_>]) -> io::Result<()> {
+    let descriptors = fs::read_dir("/proc/self/fd")?
+        .map(|entry| {
+            Ok(entry?
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<i32>().ok()))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    for fd in descriptors
+        .into_iter()
+        .flatten()
+        .filter(|fd| should_close_fd(*fd, keep))
+    {
+        // SAFETY: the caller guarantees no owner will use or drop closed descriptors.
+        if unsafe { libc::close(fd) } == -1
+            && io::Error::last_os_error().raw_os_error() != Some(libc::EBADF)
+        {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn should_close_fd(fd: i32, keep: &[BorrowedFd<'_>]) -> bool {
+    fd > libc::STDERR_FILENO && !keep.iter().any(|kept| kept.as_raw_fd() == fd)
+}
+
 pub fn chdir(path: impl AsRef<Path>) -> io::Result<()> {
     let path = path_cstring(path.as_ref())?;
     // SAFETY: path is NUL-terminated.
@@ -286,7 +320,10 @@ pub fn is_io_error(error: &io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::os::fd::AsRawFd;
+    use std::{
+        os::fd::{AsFd, AsRawFd},
+        process::Command,
+    };
 
     use super::*;
 
@@ -305,5 +342,44 @@ mod tests {
         let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
         assert_ne!(flags, -1);
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
+
+    #[test]
+    fn closes_non_stdio_descriptors_on_exec() {
+        const CHILD: &str = "KURUMI_FD_EXEC_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let file = tempfile::tempfile().unwrap();
+            // SAFETY: file owns a live descriptor and zero clears FD_CLOEXEC for this test.
+            assert_ne!(
+                unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) },
+                -1
+            );
+            let shell = CString::new("/bin/sh").unwrap();
+            let arguments = [
+                CString::new("sh").unwrap(),
+                CString::new("-c").unwrap(),
+                CString::new(format!("test ! -e /proc/self/fd/{}", file.as_raw_fd())).unwrap(),
+            ];
+            execve(&shell, &arguments, &[]).unwrap();
+            unreachable!();
+        }
+
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process::tests::closes_non_stdio_descriptors_on_exec",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn closes_descriptors_outside_allowlist() {
+        let kept = tempfile::tempfile().unwrap();
+        assert!(!should_close_fd(libc::STDERR_FILENO, &[kept.as_fd()]));
+        assert!(!should_close_fd(kept.as_raw_fd(), &[kept.as_fd()]));
+        assert!(should_close_fd(kept.as_raw_fd() + 1, &[kept.as_fd()]));
     }
 }
