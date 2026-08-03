@@ -1,12 +1,14 @@
 use std::{
     ffi::{CStr, CString},
-    io,
+    fs, io,
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
     path::Path,
 };
 
 use crate::signal::SignalNumber;
 use crate::syscall::{cvt, cvt_long, cvt_ssize, path_cstring};
+
+const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -192,8 +194,48 @@ pub fn execve(program: &CStr, arguments: &[CString], environment: &[CString]) ->
         .map(|value| value.as_ptr())
         .collect::<Vec<_>>();
     envp.push(std::ptr::null());
+    close_non_stdio_on_exec()?;
     // SAFETY: all pointers are NUL-terminated and both pointer arrays end in null.
     cvt(unsafe { libc::execve(program.as_ptr(), argv.as_ptr(), envp.as_ptr()) }).map(drop)
+}
+
+fn close_non_stdio_on_exec() -> io::Result<()> {
+    // SAFETY: close_range accepts an inclusive descriptor range and known flag bits.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            (libc::STDERR_FILENO + 1) as libc::c_uint,
+            libc::c_uint::MAX,
+            CLOSE_RANGE_CLOEXEC,
+        )
+    } != -1
+    {
+        return Ok(());
+    }
+
+    // Older kernels do not implement close_range. /proc is available at every
+    // container exec boundary and avoids scanning a potentially huge RLIMIT_NOFILE.
+    for entry in fs::read_dir("/proc/self/fd")? {
+        let Some(fd) = entry?
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+            .filter(|fd| *fd > libc::STDERR_FILENO)
+        else {
+            continue;
+        };
+        // SAFETY: fcntl only reads or updates flags for the numeric descriptor.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 {
+            if io::Error::last_os_error().raw_os_error() == Some(libc::EBADF) {
+                continue;
+            }
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd was valid above and FD_CLOEXEC is a valid descriptor flag.
+        cvt(unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) })?;
+    }
+    Ok(())
 }
 
 pub fn set_uid(uid: u32) -> io::Result<()> {
@@ -240,4 +282,28 @@ pub fn is_would_block(error: &io::Error) -> bool {
 
 pub fn is_io_error(error: &io::Error) -> bool {
     error.raw_os_error() == Some(libc::EIO)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::AsRawFd;
+
+    use super::*;
+
+    #[test]
+    fn prevents_non_stdio_descriptor_inheritance() {
+        let file = tempfile::tempfile().unwrap();
+        // SAFETY: file owns a live descriptor and zero clears FD_CLOEXEC for this test.
+        assert_ne!(
+            unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) },
+            -1
+        );
+
+        close_non_stdio_on_exec().unwrap();
+
+        // SAFETY: file still owns the live descriptor.
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags, -1);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
 }
