@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "kurumi-containerd"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "kurumi-containerd-config"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "fs2",
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "kurumi-containerd-helper"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bitflags",
  "libc",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "kurumi-containerd-runtime"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "flate2",
