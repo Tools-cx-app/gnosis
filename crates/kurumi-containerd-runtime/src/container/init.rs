@@ -137,7 +137,8 @@ pub(crate) fn prepare_runtime(system: InitSystem) -> Result<()> {
 #[cfg(target_os = "android")]
 fn override_docker_startup() -> Result<()> {
     const OVERRIDE: &str = "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd \
-        -H fd:// --containerd=/run/containerd/containerd.sock --ip6tables=false --iptables=false\n";
+        -H fd:// --containerd=/run/containerd/containerd.sock --ip6tables=false --iptables=false \
+        --ip-forward=false\n";
 
     for unit in ["docker.service", "dockerd.service"] {
         let directory = format!("/run/systemd/system/{unit}.d");
